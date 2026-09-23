@@ -263,6 +263,10 @@
   /* v4: details no longer pop up on first note tap */
   #inspector { display:none; opacity:0; pointer-events:none; transform:translateY(8px); transition:opacity .14s ease, transform .14s ease; }
   #inspector.show { display:block; opacity:1; pointer-events:auto; transform:translateY(0); }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner { animation: none; }
+    #inspector { transition: none; }
+  }
 
   @media (max-width:700px), (max-height:500px) and (pointer:coarse) {
     #inspector .closeX { width:44px; height:44px; flex:0 0 44px; }

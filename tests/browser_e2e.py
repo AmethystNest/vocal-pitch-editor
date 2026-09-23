@@ -285,6 +285,14 @@ def main():
             assert metrics['documentWidth']<=metrics['width'], f'horizontal overflow on mobile: {metrics}'
             assert metrics['touchPoints']>0, f'touch input unavailable: {metrics}'
             assert metrics['essentialButtonsVisible'], f'essential mobile controls are not visible: {metrics}'
+            if browser_name=='mobile-mini':
+                page.emulate_media(reduced_motion='reduce')
+                motion=page.evaluate("""() => ({
+                    spinner:getComputedStyle(document.querySelector('.spinner')).animationName,
+                    inspector:getComputedStyle(document.querySelector('#inspector')).transitionProperty
+                })""")
+                assert motion=={'spinner':'none','inspector':'none'}, f'reduced-motion preference was not respected: {motion}'
+                page.emulate_media(reduced_motion='no-preference')
             assert page.locator('#backBtn').is_enabled() and page.locator('#backBtn').get_attribute('aria-label')=='ボーカル音源を選択', 'initial audio picker is not clearly accessible'
             unavailable_controls=page.locator('#topbar button:not(#backBtn)').evaluate_all("els => els.filter(el => el.getAttribute('tabindex') !== '-1').map(el => el.id)")
             assert not unavailable_controls, f'editor-only controls remain in initial keyboard/VoiceOver order: {unavailable_controls}'
