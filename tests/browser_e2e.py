@@ -395,7 +395,7 @@ def main():
             page.locator('#a11yNextNote').focus()
             nav_box=page.locator('#accessibleNoteNav').bounding_box()
             assert nav_box and nav_box['width']>=120 and nav_box['height']>=60 and nav_box['x']>=0, f'keyboard-focused assistive controls are not visibly reachable: {nav_box}'
-            page.locator('#a11yNextNote').dispatch_event('click')
+            page.keyboard.press('Enter')
             page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
             assert page.locator('#a11yStatus').text_content().startswith('ノート 1 / '), 'VoiceOver next-note control did not announce the selected note position'
             canvas=page.locator('#rollCanvas')
