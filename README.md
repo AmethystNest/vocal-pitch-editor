@@ -1,5 +1,11 @@
 # Vocal Pitch Editor
 
+## v28 iPhone audio-memory preflight
+
+Supported PCM/float WAV files are inspected from their RIFF header before full-file decoding. On iPhone, files whose estimated decoded working set exceeds the safety budget return to the upload screen without calling `decodeAudioData`. Compressed or non-standard WAV subformats continue through Web Audio decoding and are checked against the actual decoded buffer. The Service Worker cache is v28.
+
+`BROWSER=mobile-mini` exercises a 320×568 touch viewport, verifies the oversized-WAV preflight makes zero decode calls, then loads, edits, plays, and exports a normal WAV.
+
 ## v27 mobile accessibility
 
 The pitch roll can receive keyboard focus. Left and right select notes; up and down shift the selected note by one semitone. The selected note's before/after pitch is announced to assistive technology, and active tool states are exposed. On narrow screens, Open, playback, Undo and WAV export stay at the start of the toolbar. The Service Worker cache is v27.

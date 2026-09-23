@@ -235,6 +235,47 @@
     return ac;
   }
 
+  async function estimateWavMemoryMB(file, outputSampleRate) {
+    // WAV carries its decoded format in a small header, so reject oversized
+    // iPhone imports before allocating the full compressed-file ArrayBuffer.
+    // Walk RIFF chunks instead of assuming the usual 44-byte PCM header.
+    if (!file || !/\.wave?$/i.test(file.name) || file.size < 44) return null;
+    const header = await file.slice(0, Math.min(file.size, 1024 * 1024)).arrayBuffer();
+    const view = new DataView(header);
+    const fourCC = (offset) => offset + 4 <= view.byteLength
+      ? String.fromCharCode(view.getUint8(offset), view.getUint8(offset + 1), view.getUint8(offset + 2), view.getUint8(offset + 3))
+      : '';
+    if (fourCC(0) !== 'RIFF' || fourCC(8) !== 'WAVE') return null;
+
+    let channels = 0, sampleRate = 0, blockAlign = 0, dataBytes = 0, format = 0;
+    for (let offset = 12; offset + 8 <= view.byteLength;) {
+      const id = fourCC(offset);
+      const size = view.getUint32(offset + 4, true);
+      const body = offset + 8;
+      if (id === 'fmt ' && size >= 16 && body + 16 <= view.byteLength) {
+        format = view.getUint16(body, true);
+        channels = view.getUint16(body + 2, true);
+        sampleRate = view.getUint32(body + 4, true);
+        blockAlign = view.getUint16(body + 12, true);
+      } else if (id === 'data') {
+        dataBytes = size;
+        break;
+      }
+      const next = body + size + (size & 1);
+      if (next <= offset || next > view.byteLength) break;
+      offset = next;
+    }
+    // Compressed WAV subformats can encode many frames per block. Let Web
+    // Audio decode those and use its exact AudioBuffer dimensions instead.
+    if (![1, 3].includes(format) || !channels || !sampleRate || !blockAlign || !dataBytes) return null;
+
+    const frames = dataBytes / blockAlign;
+    const durationSec = frames / sampleRate;
+    const decodedFrames = durationSec * Math.max(sampleRate, outputSampleRate || sampleRate);
+    // Match the conservative post-decode estimate used by loadFile.
+    return (decodedFrames * channels * 4 * 3 + decodedFrames * 8 * 3) / (1024 * 1024);
+  }
+
   async function decodeAudioFile(file) {
     if (!file || !file.size) throw new Error('空のファイルです');
     // Keep a practical ceiling for iPhone memory pressure. This is not a hard format limit.
@@ -242,6 +283,12 @@
       throw new Error('ファイルが大きすぎます。300MB以下を推奨します');
     }
     const ac = await unlockAudio();
+    if (IS_IOS) {
+      const estimatedMB = await estimateWavMemoryMB(file, ac.sampleRate);
+      if (estimatedMB != null && estimatedMB > 430) {
+        throw new Error('このWAV音源はiPhoneのメモリ上限に近いため読み込めません。短く分割するか、MP3/M4A版をお試しください。');
+      }
+    }
     const arrayBuf = await file.arrayBuffer();
 
     // Modern Safari accepts the original ArrayBuffer directly. Avoid slice(0):

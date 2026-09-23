@@ -73,6 +73,11 @@ def main():
         mobile_share_modes=('mobile-share-fallback','mobile-share-cancel')
         expected_seconds=75.2 if browser_name=='mobile-long' else 1.4
         wav=Path(temp)/'tone.wav';tone(wav,seconds=expected_seconds)
+        oversized_wav=Path(temp)/'oversized.wav'
+        header=bytearray(44)
+        struct.pack_into('<4sI4s4sIHHIIHH4sI',header,0,
+            b'RIFF',57_600_036,b'WAVE',b'fmt ',16,1,2,48_000,192_000,4,16,b'data',57_600_000)
+        oversized_wav.write_bytes(header)
         audio_file=wav
         if browser_name in ('mobile-mp3','mobile-m4a'):
             ffmpeg=os.environ.get('FFMPEG_PATH') or shutil.which('ffmpeg')
@@ -134,6 +139,12 @@ def main():
             page.add_init_script("""(() => {
                 const Native = window.AudioContext || window.webkitAudioContext;
                 if (!Native) return;
+                window.__testDecodeAudioCalls = 0;
+                const nativeDecode = Native.prototype.decodeAudioData;
+                Native.prototype.decodeAudioData = function(...args) {
+                    window.__testDecodeAudioCalls++;
+                    return nativeDecode.apply(this,args);
+                };
                 window.__testDocumentHidden = false;
                 Object.defineProperty(document, 'hidden', {
                     configurable:true,
@@ -218,6 +229,24 @@ def main():
             assert page.locator('#modeLineBtn').get_attribute('aria-pressed')=='true', 'line tool state was not exposed'
             page.locator('#modeNoteBtn').tap()
             assert page.locator('#modeNoteBtn').get_attribute('aria-pressed')=='true', 'note tool state was not exposed'
+        if browser_name=='mobile-mini':
+            # A tiny WAV header declaring five minutes of stereo PCM would
+            # otherwise make decodeAudioData allocate a >600 MiB AudioBuffer.
+            page.locator('#fileInput').set_input_files(str(oversized_wav))
+            page.wait_for_function("document.querySelector('#toast').style.display === 'block' && document.querySelector('#loadingScreen').style.display === 'none'",timeout=5000)
+            guard_state=page.evaluate("""() => ({
+                toast:document.querySelector('#toast').textContent,
+                loading:document.querySelector('#loadingScreen').style.display,
+                uploadVisible:!document.querySelector('#emptyUpload').classList.contains('hidden'),
+                disabled:document.querySelector('#exportBtn').disabled,
+                fileName:document.querySelector('#fileNameLabel').textContent,
+                decodeCalls:window.__testDecodeAudioCalls
+            })""")
+            assert 'iPhone' in guard_state['toast'] and 'WAV' in guard_state['toast'], f'oversized WAV was not rejected before decode: {guard_state}'
+            assert guard_state['uploadVisible'] and guard_state['disabled'] and not guard_state['fileName'], f'failed WAV import did not return to a clean upload state: {guard_state}'
+            assert guard_state['decodeCalls']==0, f'oversized WAV reached decodeAudioData: {guard_state}'
+            assert len(console_errors)==1 and 'decodeAudioFile' in console_errors[0], f'oversized WAV rejection did not report one expected import error: {console_errors}'
+            console_errors.clear()
         page.locator('#fileInput').set_input_files(str(audio_file))
         try:
             page.wait_for_function("document.querySelector('#exportBtn').disabled === false",timeout=45000)
