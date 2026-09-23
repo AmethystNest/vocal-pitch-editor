@@ -168,6 +168,16 @@ def main():
         assert 'tone.wav' in page.locator('#fileNameLabel').inner_text()
         assert not errors, f'JS errors: {errors}'
         assert not console_errors, f'Console errors: {console_errors}'
+        if browser_name in ('mobile','mobile-se'):
+            # A short iPhone-UA guide exercises the combined-memory guard,
+            # transferred mono analysis PCM, and full-rate reference playback.
+            page.locator('#refFileInput').set_input_files(str(wav))
+            page.wait_for_function("document.querySelector('#refPlayBtn').disabled === false",timeout=30000)
+            assert not errors, f'JS errors after reference analysis: {errors}'
+            page.locator('#refPlayBtn').tap()
+            page.wait_for_function("document.querySelector('#refPlayBtn').textContent.includes('⏸')",timeout=5000)
+            page.locator('#refPlayBtn').tap()
+            page.wait_for_function("document.querySelector('#refPlayBtn').textContent.includes('▶')",timeout=5000)
         if browser_name in mobile_modes:
             # Select the fixture's centered A3 note through the real canvas
             # pointer path, make a small correction, and restore it with Undo.
