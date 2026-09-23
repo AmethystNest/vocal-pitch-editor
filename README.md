@@ -2,7 +2,7 @@
 
 ## v42 reference correction feedback
 
-Bulk correction is disabled when the reference has no matching notes or when every detected note already matches the current pitch. The analysis message reports the number of actionable corrections or explains why none can be applied. Mobile browser E2E checks the identical-reference no-op case. The Service Worker cache is v42.
+Bulk correction is disabled when the reference has no matching notes or when every detected note already matches the current pitch. The analysis message reports the number of actionable corrections or explains why none can be applied. Mobile browser E2E checks the identical-reference no-op case. The Service Worker cache is v42. Mobile accessibility E2E also checks VoiceOver-style next/previous navigation through three notes, pitch announcements, and inspector clearance at compact widths.
 
 ## v41 mobile assistive-controls layout
 

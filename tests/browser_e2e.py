@@ -66,6 +66,16 @@ def tone(path,rate=24000,seconds=1.4,hz=220):
         samples=(int(0.25*32767*math.sin(2*math.pi*hz*i/rate)) for i in range(int(rate*seconds)))
         f.writeframes(b''.join(struct.pack('<h',s) for s in samples))
 
+def tone_sequence(path,rate=24000,seconds=1.8,frequencies=(220,247,262)):
+    frames=int(rate*seconds);segment_frames=frames//len(frequencies);phase=0.0
+    samples=[]
+    for i in range(frames):
+        hz=frequencies[min(len(frequencies)-1,i//segment_frames)]
+        samples.append(struct.pack('<h',round(0.25*32767*math.sin(phase))))
+        phase=(phase+2*math.pi*hz/rate)%(2*math.pi)
+    with wave.open(str(path),'wb') as f:
+        f.setnchannels(1);f.setsampwidth(2);f.setframerate(rate);f.writeframes(b''.join(samples))
+
 def prepare_mobile_download(page):
     page.locator('#exportBtn').tap()
     page.wait_for_function("document.querySelector('#exportBtn').dataset.exportAction === 'download'",timeout=45000)
@@ -419,6 +429,24 @@ def main():
             assert page.locator('#inspOffset').inner_text()!=keyboard_offset, 'keyboard pitch correction did not change the selected note'
             page.locator('#undoBtn').tap()
             page.wait_for_function("document.querySelector('#undoBtn').disabled === true",timeout=5000)
+            if browser_name in ('mobile','mobile-se','mobile-mini'):
+                # Verify actual previous/next navigation across separate notes,
+                # including the screen-reader focus layout on compact phones.
+                sequence=Path(temp)/'three-notes.wav';tone_sequence(sequence)
+                page.locator('#fileInput').set_input_files(str(sequence))
+                page.wait_for_function("!document.querySelector('#accessibleNoteNav').hidden && document.querySelector('#rollCanvas').tabIndex === 0",timeout=15000)
+                page.locator('#a11yNextNote').focus();page.keyboard.press('Enter')
+                assert page.locator('#a11yStatus').text_content().startswith('ノート 1 / 3、'), 'VoiceOver navigation did not select the first of three notes'
+                page.keyboard.press('Enter')
+                assert page.locator('#a11yStatus').text_content().startswith('ノート 2 / 3、'), 'VoiceOver next-note action did not advance through the sequence'
+                page.locator('#a11yPreviousNote').focus();page.keyboard.press('Enter')
+                assert page.locator('#a11yStatus').text_content().startswith('ノート 1 / 3、'), 'VoiceOver previous-note action did not return to the prior note'
+                sequence_layout=page.evaluate("""() => {
+                    const nav=document.querySelector('#accessibleNoteNav').getBoundingClientRect();
+                    const panel=document.querySelector('#inspector').getBoundingClientRect();
+                    return {width:document.documentElement.scrollWidth,viewport:innerWidth,navTop:nav.top,panelBottom:panel.bottom,separated:nav.top>=panel.bottom};
+                }""")
+                assert sequence_layout['width']<=sequence_layout['viewport'] and sequence_layout['separated'], f'compact VoiceOver note navigation overlaps controls or overflows: {sequence_layout}'
             canvas_box=canvas.bounding_box()
             assert canvas_box and canvas_box['width']>0 and canvas_box['height']>0
             canvas.tap(position={'x':canvas_box['width']/2,'y':canvas_box['height']/2})
