@@ -4,7 +4,7 @@ touch run, BROWSER=mobile-se for a compact iPhone viewport, BROWSER=mobile-mini
 for a 320px-wide mobile viewport, BROWSER=mobile-long
 to exercise long-file memory handling, or BROWSER=pwa-offline to verify offline use.
 BROWSER=mobile-share-fallback, BROWSER=mobile-share-cancel and BROWSER=mobile-share-success simulate iOS share-sheet outcomes.
-BROWSER=mobile-mp3 and BROWSER=mobile-m4a cover compressed formats; these modes require FFmpeg.
+BROWSER=mobile-mp3, BROWSER=mobile-m4a and BROWSER=mobile-aac cover compressed audio; these modes require FFmpeg.
 Chromium simulations do not replace iPhone hardware testing.
 """
 from pathlib import Path
@@ -73,7 +73,7 @@ def prepare_mobile_download(page):
 def main():
     browser_name=os.environ.get('BROWSER','chromium').lower()
     with TemporaryDirectory() as temp,serve(https=browser_name=='pwa-offline') as url,sync_playwright() as pw:
-        mobile_modes=('mobile','mobile-se','mobile-mini','mobile-long','mobile-cycle','mobile-share-fallback','mobile-share-cancel','mobile-share-success','mobile-mp3','mobile-m4a')
+        mobile_modes=('mobile','mobile-se','mobile-mini','mobile-long','mobile-cycle','mobile-share-fallback','mobile-share-cancel','mobile-share-success','mobile-mp3','mobile-m4a','mobile-aac')
         mobile_share_modes=('mobile-share-fallback','mobile-share-cancel','mobile-share-success')
         expected_seconds=75.2 if browser_name=='mobile-long' else 1.4
         wav=Path(temp)/'tone.wav';tone(wav,seconds=expected_seconds)
@@ -101,16 +101,18 @@ def main():
             b'RIFF',36+ref_bytes,b'WAVE',b'fmt ',16,1,2,48_000,192_000,4,16,b'data',ref_bytes)
         combined_oversized_wav.write_bytes(ref_header)
         audio_file=wav
-        if browser_name in ('mobile-mp3','mobile-m4a'):
+        if browser_name in ('mobile-mp3','mobile-m4a','mobile-aac'):
             ffmpeg=os.environ.get('FFMPEG_PATH') or shutil.which('ffmpeg')
             if not ffmpeg:
-                raise RuntimeError('MP3/M4A browser coverage requires FFmpeg (set FFMPEG_PATH or add ffmpeg to PATH)')
-            audio_file=Path(temp)/('tone.mp3' if browser_name=='mobile-mp3' else 'tone.m4a')
+                raise RuntimeError('MP3/M4A/AAC browser coverage requires FFmpeg (set FFMPEG_PATH or add ffmpeg to PATH)')
+            audio_file=Path(temp)/('tone.mp3' if browser_name=='mobile-mp3' else 'tone.m4a' if browser_name=='mobile-m4a' else 'tone.aac')
             encode_args=[ffmpeg,'-y','-hide_banner','-loglevel','error','-i',str(wav),'-vn']
             if browser_name=='mobile-mp3':
                 encode_args += ['-c:a','libmp3lame','-b:a','128k']
-            else:
+            elif browser_name=='mobile-m4a':
                 encode_args += ['-c:a','aac','-b:a','128k','-movflags','+faststart']
+            else:
+                encode_args += ['-c:a','aac','-b:a','128k','-f','adts']
             encode_args.append(str(audio_file))
             encoded=subprocess.run(encode_args,capture_output=True,text=True)
             assert encoded.returncode==0 and audio_file.is_file(), f'could not create {audio_file.suffix} fixture: {encoded.stderr}'
@@ -360,7 +362,7 @@ def main():
             assert page.locator('#fileInput').evaluate('(input) => input.value') == '', 'main file picker value was not cleared after selection'
         assert not errors, f'JS errors: {errors}'
         assert not console_errors, f'Console errors: {console_errors}'
-        if browser_name in ('mobile','mobile-se','mobile-mini','mobile-cycle'):
+        if browser_name in ('mobile','mobile-se','mobile-mini','mobile-cycle','mobile-mp3','mobile-m4a','mobile-aac'):
             # A short iPhone-UA guide exercises the combined-memory guard,
             # transferred mono analysis PCM, and full-rate reference playback.
             if browser_name=='mobile-mini':
@@ -378,7 +380,8 @@ def main():
                 assert ref_guard['vocalStillLoaded'] and ref_guard['referenceDisabled'], f'reference preflight damaged the current vocal session: {ref_guard}'
                 assert len(console_errors)==1 and 'loadReference' in console_errors[0], f'reference memory guard did not report one expected error: {console_errors}'
                 console_errors.clear()
-            page.locator('#refFileInput').set_input_files(str(wav))
+            reference_file=audio_file if browser_name in ('mobile-mp3','mobile-m4a','mobile-aac') else wav
+            page.locator('#refFileInput').set_input_files(str(reference_file))
             page.wait_for_function("document.querySelector('#refPlayBtn').disabled === false",timeout=30000)
             assert not errors, f'JS errors after reference analysis: {errors}'
             page.locator('#refPlayBtn').tap()
@@ -681,7 +684,7 @@ def main():
             # 24 kHz fixture commonly becomes 48 kHz in Chromium.
             out_rate=f.getframerate()
             assert 22050 <= out_rate <= 192000
-            duration_tolerance=0.08 if audio_file.suffix.lower() in ('.mp3','.m4a') else 2/out_rate
+            duration_tolerance=0.08 if audio_file.suffix.lower() in ('.mp3','.m4a','.aac') else 2/out_rate
             assert abs((f.getnframes()/out_rate)-expected_seconds) < duration_tolerance
             raw=f.readframes(f.getnframes())
         pcm=[int.from_bytes(raw[i:i+3],'little',signed=True) for i in range(0,len(raw),3)]

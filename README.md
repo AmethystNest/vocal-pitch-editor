@@ -26,6 +26,8 @@ PCM/float WAV files, including standard WAVE_FORMAT_EXTENSIBLE PCM/float subform
 
 `BROWSER=mobile-mini` exercises a 320×568 touch viewport, verifies oversized vocal and combined vocal/reference WAV preflights make zero decode calls, then loads, edits, plays, and exports a normal WAV.
 
+`BROWSER=mobile-aac` uses FFmpeg to create a standalone AAC/ADTS source and verifies import, analysis, reference playback, pitch editing, and WAV export in an iPhone-UA Chromium session. `BROWSER=mobile-m4a` separately covers AAC in the M4A container; both require FFmpeg and are automated browser checks, not a substitute for iPhone Safari testing.
+
 ## v27 mobile accessibility
 
 The pitch roll can receive keyboard focus. Left and right select notes; up and down shift the selected note by one semitone. The selected note's before/after pitch is announced to assistive technology, and active tool states are exposed. On narrow screens, Open, playback, Undo and WAV export stay at the start of the toolbar. The Service Worker cache is v27.
