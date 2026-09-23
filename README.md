@@ -23,6 +23,8 @@ Windows + Playwright Chromiumで `npm run test:browser` 相当のE2Eを実行し
 
 `BROWSER=mobile` を指定すると、390×844・DPR 3・タッチ有効・iPhone User-AgentのChromiumで、横はみ出し、音源読込、ノート選択、±10¢補正とUndo、ノート分割とUndo、二本指ピンチ、再生、WAV書き出しを検証できる。`BROWSER=mobile-long` は75.2秒音源でiPhone向けダウンサンプル解析を含めて検証する。Windows PowerShellでは `$env:BROWSER='mobile'; python tests/browser_e2e.py` または `$env:BROWSER='mobile-long'; python tests/browser_e2e.py` を実行する。これはiPhone実機Safariの代替ではない。
 
+`BROWSER=mobile-se` は375×667・DPR 2のコンパクト画面でタッチ編集と二本指ズームを検証する。`BROWSER=pwa-offline` は一時的な自己署名HTTPSサーバーでService Workerを登録し、オフライン再読込後の音源解析・再生・書き出しまで検証する。HTTPS試験にはPythonの`cryptography`パッケージが必要。どちらもChromiumによる自動テストで、iPhone実機Safariの最終確認は別途必要。
+
 ## v22 iPhone/PWA reliability
 
 GitHub Pages向けの実ファイル配置を `src/` / `tests/` に統一。iPhoneの未読込キャンバスタップも共通のファイル選択経路を使う。Service Workerはv22キャッシュへ更新し、インストール後に即時activateできるようにして、ホーム画面PWAが旧v19 JavaScriptを保持し続ける問題を防ぐ。

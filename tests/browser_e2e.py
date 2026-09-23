@@ -1,26 +1,60 @@
 """Real browser smoke test: file upload -> analysis -> WAV export.
 Set BROWSER=webkit for Safari-engine coverage, BROWSER=mobile for an iPhone-sized
-touch run, or BROWSER=mobile-long to exercise long-file iPhone memory handling.
+touch run, BROWSER=mobile-se for a compact iPhone viewport, BROWSER=mobile-long
+to exercise long-file memory handling, or BROWSER=pwa-offline to verify offline use.
 Chromium simulations do not replace iPhone hardware testing.
 """
 from pathlib import Path
+from tempfile import TemporaryDirectory
+import tempfile
+import uuid
+import math, struct, wave, os
+import ssl
+import mimetypes
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from threading import Thread
-from tempfile import TemporaryDirectory
 from contextlib import contextmanager
-import math, struct, wave, os
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from datetime import datetime, timedelta, timezone
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
+from playwright.sync_api import sync_playwright
 
 ROOT=Path(__file__).resolve().parents[1]
 @contextmanager
-def serve():
+def serve(https=False):
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self,*args,**kwargs):super().__init__(*args,directory=str(ROOT),**kwargs)
         def log_message(self,*args):pass
+        def guess_type(self,path):
+            if path.endswith(('.js','.mjs')): return 'text/javascript'
+            return mimetypes.guess_type(path)[0] or 'application/octet-stream'
     server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+    if https:
+        # Chromium accepts this test-only TLS endpoint; no certificate is
+        # installed in or trusted by the host operating system.
+        key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+        subject=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,'localhost')])
+        cert=(x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+            .public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.now(timezone.utc)-timedelta(minutes=1))
+            .not_valid_after(datetime.now(timezone.utc)+timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName('localhost')]),critical=False)
+            .sign(key,hashes.SHA256()))
+        cert_path=Path(tempfile.gettempdir())/f'pitch-e2e-{uuid.uuid4().hex}-cert.pem'
+        key_path=Path(tempfile.gettempdir())/f'pitch-e2e-{uuid.uuid4().hex}-key.pem'
+        cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.TraditionalOpenSSL,serialization.NoEncryption()))
+        tls=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(cert_path,key_path)
+        server.socket=tls.wrap_socket(server.socket,server_side=True)
     thread=Thread(target=server.serve_forever,daemon=True);thread.start()
-    try:yield f'http://127.0.0.1:{server.server_port}/'
-    finally:server.shutdown();server.server_close()
+    try:yield f'{"https" if https else "http"}://localhost:{server.server_port}/'
+    finally:
+        server.shutdown();server.server_close()
+        if https:
+            cert_path.unlink(missing_ok=True);key_path.unlink(missing_ok=True)
 
 def tone(path,rate=24000,seconds=1.4):
     with wave.open(str(path),'wb') as f:
@@ -29,8 +63,9 @@ def tone(path,rate=24000,seconds=1.4):
         f.writeframes(b''.join(struct.pack('<h',s) for s in samples))
 
 def main():
-    with TemporaryDirectory() as temp,serve() as url,sync_playwright() as pw:
-        browser_name=os.environ.get('BROWSER','chromium').lower()
+    browser_name=os.environ.get('BROWSER','chromium').lower()
+    with TemporaryDirectory() as temp,serve(https=browser_name=='pwa-offline') as url,sync_playwright() as pw:
+        mobile_modes=('mobile','mobile-se','mobile-long')
         expected_seconds=75.2 if browser_name=='mobile-long' else 1.4
         wav=Path(temp)/'tone.wav';tone(wav,seconds=expected_seconds)
         if browser_name=='webkit':
@@ -38,10 +73,12 @@ def main():
         else:
             chromium_path=os.environ.get('CHROMIUM_PATH')
             launch_args=dict(headless=True,args=['--no-sandbox','--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required'])
+            if browser_name=='pwa-offline':
+                launch_args['args'].append('--ignore-certificate-errors')
             if chromium_path:
                 launch_args['executable_path']=chromium_path
             browser=pw.chromium.launch(**launch_args)
-        context_args=dict(accept_downloads=True)
+        context_args=dict(accept_downloads=True,ignore_https_errors=browser_name=='pwa-offline')
         if browser_name=='webkit':
             # Exercise the iPhone-specific memory/resynthesis path as well as
             # WebKit itself. Playwright WebKit on Windows otherwise identifies
@@ -51,12 +88,12 @@ def main():
                 'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 '
                 'Mobile/15E148 Safari/604.1'
             )
-        elif browser_name in ('mobile','mobile-long'):
+        elif browser_name in mobile_modes:
             # Chromium supplies working Web Audio on this host while the iPhone
             # user agent exercises the app's iOS memory-first code paths.
             context_args.update(
-                viewport={'width':390,'height':844},
-                device_scale_factor=3,
+                viewport={'width':375,'height':667} if browser_name=='mobile-se' else {'width':390,'height':844},
+                device_scale_factor=2 if browser_name=='mobile-se' else 3,
                 is_mobile=True,
                 has_touch=True,
                 user_agent=(
@@ -72,14 +109,22 @@ def main():
         page.on('pageerror',lambda e:errors.append(str(e)))
         page.on('console',lambda m: console_errors.append(m.text) if m.type=='error' else None)
         page.goto(url,wait_until='load',timeout=30000)
-        if browser_name in ('mobile','mobile-long'):
+        if browser_name=='pwa-offline':
+            page.wait_for_function("navigator.serviceWorker?.controller !== null",timeout=15000)
+            page.evaluate("navigator.serviceWorker.ready")
+            context.set_offline(True)
+            page.reload(wait_until='load',timeout=15000)
+            page.wait_for_selector('#fileInput',state='attached',timeout=5000)
+            assert page.locator('#emptyUpload').is_visible(), 'cached app shell did not render offline'
+        if browser_name in mobile_modes:
             metrics=page.evaluate("""() => ({
                 width: innerWidth,
                 height: innerHeight,
                 documentWidth: document.documentElement.scrollWidth,
                 touchPoints: navigator.maxTouchPoints
             })""")
-            assert metrics['width']==390 and metrics['height']==844, f'mobile viewport mismatch: {metrics}'
+            expected_viewport=(375,667) if browser_name=='mobile-se' else (390,844)
+            assert (metrics['width'],metrics['height'])==expected_viewport, f'mobile viewport mismatch: {metrics}'
             assert metrics['documentWidth']<=metrics['width'], f'horizontal overflow on mobile: {metrics}'
             assert metrics['touchPoints']>0, f'touch input unavailable: {metrics}'
         page.locator('#fileInput').set_input_files(str(wav))
@@ -99,7 +144,7 @@ def main():
         assert 'tone.wav' in page.locator('#fileNameLabel').inner_text()
         assert not errors, f'JS errors: {errors}'
         assert not console_errors, f'Console errors: {console_errors}'
-        if browser_name in ('mobile','mobile-long'):
+        if browser_name in mobile_modes:
             # Select the fixture's centered A3 note through the real canvas
             # pointer path, make a small correction, and restore it with Undo.
             canvas=page.locator('#rollCanvas')
@@ -130,7 +175,7 @@ def main():
             page.locator('#undoBtn').tap()
             page.wait_for_function("document.querySelector('#undoBtn').disabled === true",timeout=5000)
 
-            if browser_name=='mobile':
+            if browser_name in ('mobile','mobile-se'):
                 # Two actual touch points exercise the pinch-to-zoom handler;
                 # the canvas image must be redrawn at the new time scale.
                 cdp=context.new_cdp_session(page)
@@ -152,17 +197,17 @@ def main():
         # Import intentionally leaves the full-song AudioBuffer unmaterialized
         # to reduce iPhone peak memory. Exercise Play so the lazy playback path
         # is covered by the browser test rather than only by static inspection.
-        if browser_name in ('mobile','mobile-long'): page.locator('#playBtn').tap()
+        if browser_name in mobile_modes: page.locator('#playBtn').tap()
         else: page.locator('#playBtn').click()
         page.wait_for_function("document.querySelector('#playBtn').textContent.includes('停止')",timeout=10000)
-        if browser_name in ('mobile','mobile-long'): page.locator('#playBtn').tap()
+        if browser_name in mobile_modes: page.locator('#playBtn').tap()
         else: page.locator('#playBtn').click()
         page.wait_for_function("document.querySelector('#playBtn').textContent.includes('再生')",timeout=10000)
         assert not errors, f'JS errors after playback: {errors}'
         assert not console_errors, f'Console errors after playback: {console_errors}'
         # Exercise the actual export UI and validate WAV container/length.
         with page.expect_download(timeout=45000) as info:
-            if browser_name in ('mobile','mobile-long'): page.locator('#exportBtn').tap()
+            if browser_name in mobile_modes: page.locator('#exportBtn').tap()
             else: page.locator('#exportBtn').click()
         download=info.value
         target=Path(temp)/'export.wav';download.save_as(target)
