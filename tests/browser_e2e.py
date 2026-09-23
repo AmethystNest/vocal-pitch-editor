@@ -397,12 +397,12 @@ def main():
             assert nav_box and nav_box['width']>=120 and nav_box['height']>=60 and nav_box['x']>=0, f'keyboard-focused assistive controls are not visibly reachable: {nav_box}'
             page.locator('#a11yNextNote').dispatch_event('click')
             page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
-            assert page.locator('#a11yStatus').text_content().startswith('選択中 '), 'VoiceOver next-note control did not announce the selected pitch'
+            assert page.locator('#a11yStatus').text_content().startswith('ノート 1 / '), 'VoiceOver next-note control did not announce the selected note position'
             canvas=page.locator('#rollCanvas')
             canvas.focus()
             canvas.press('ArrowRight')
             page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
-            assert page.locator('#a11yStatus').text_content().startswith('選択中 '), 'keyboard note selection was not announced'
+            assert page.locator('#a11yStatus').text_content().startswith('ノート '), 'keyboard note selection was not announced with its position'
             assert page.locator('#rollCanvas').get_attribute('aria-describedby')=='a11yStatus', 'selected pitch description is disconnected from the focused canvas'
             keyboard_offset=page.locator('#inspOffset').inner_text()
             canvas.press('ArrowUp')
