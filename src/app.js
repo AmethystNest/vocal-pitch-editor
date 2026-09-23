@@ -254,6 +254,12 @@
       const body = offset + 8;
       if (id === 'fmt ' && size >= 16 && body + 16 <= view.byteLength) {
         format = view.getUint16(body, true);
+        if (format === 0xfffe && size >= 40 && body + 40 <= view.byteLength) {
+          const subtype = view.getUint32(body + 24, true);
+          const guidTail = [0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113];
+          const hasStandardSubtypeGuid = guidTail.every((byte, index) => view.getUint8(body + 28 + index) === byte);
+          if (hasStandardSubtypeGuid && (subtype === 1 || subtype === 3)) format = subtype;
+        }
         channels = view.getUint16(body + 2, true);
         sampleRate = view.getUint32(body + 4, true);
         blockAlign = view.getUint16(body + 12, true);

@@ -78,6 +78,18 @@ def main():
         struct.pack_into('<4sI4s4sIHHIIHH4sI',header,0,
             b'RIFF',57_600_036,b'WAVE',b'fmt ',16,1,2,48_000,192_000,4,16,b'data',57_600_000)
         oversized_wav.write_bytes(header)
+        extensible_wav=Path(temp)/'oversized-extensible.wav'
+        extensible_header=bytearray(68)
+        struct.pack_into('<4sI4s4sIHHIIHHHHI',extensible_header,0,
+            b'RIFF',57_600_060,b'WAVE',b'fmt ',40,0xfffe,2,48_000,192_000,4,16,22,16,3)
+        struct.pack_into('<IHH8B',extensible_header,44,1,0,16,128,0,0,170,0,56,155,113)
+        struct.pack_into('<4sI',extensible_header,60,b'data',57_600_000)
+        extensible_wav.write_bytes(extensible_header)
+        unknown_wav=Path(temp)/'unknown-subformat.wav'
+        unknown_header=bytearray(44)
+        struct.pack_into('<4sI4s4sIHHIIHH4sI',unknown_header,0,
+            b'RIFF',52,b'WAVE',b'fmt ',16,6,1,48_000,48_000,1,8,b'data',16)
+        unknown_wav.write_bytes(unknown_header)
         combined_oversized_wav=Path(temp)/'combined-oversized.wav'
         ref_bytes=196*48_000*4
         ref_header=bytearray(44)
@@ -146,10 +158,15 @@ def main():
                 const Native = window.AudioContext || window.webkitAudioContext;
                 if (!Native) return;
                 window.__testDecodeAudioCalls = 0;
+                window.__testDecodeAudioSettled = 0;
                 const nativeDecode = Native.prototype.decodeAudioData;
                 Native.prototype.decodeAudioData = function(...args) {
                     window.__testDecodeAudioCalls++;
-                    return nativeDecode.apply(this,args);
+                    const result = nativeDecode.apply(this,args);
+                    if (result && typeof result.then === 'function') {
+                        result.then(() => window.__testDecodeAudioSettled++, () => window.__testDecodeAudioSettled++);
+                    }
+                    return result;
                 };
                 window.__testDocumentHidden = false;
                 Object.defineProperty(document, 'hidden', {
@@ -253,6 +270,25 @@ def main():
             assert guard_state['decodeCalls']==0, f'oversized WAV reached decodeAudioData: {guard_state}'
             assert len(console_errors)==1 and 'decodeAudioFile' in console_errors[0], f'oversized WAV rejection did not report one expected import error: {console_errors}'
             console_errors.clear()
+            page.locator('#fileInput').set_input_files(str(extensible_wav))
+            page.wait_for_function("document.querySelector('#toast').style.display === 'block' && document.querySelector('#loadingScreen').style.display === 'none'",timeout=5000)
+            extensible_calls=page.evaluate('window.__testDecodeAudioCalls')
+            assert extensible_calls==0, f'oversized WAVE_FORMAT_EXTENSIBLE PCM reached decodeAudioData: {extensible_calls}'
+            assert len(console_errors)==1 and 'decodeAudioFile' in console_errors[0], f'extensible WAV preflight did not report one expected error: {console_errors}'
+            console_errors.clear()
+            page.locator('#fileInput').set_input_files(str(unknown_wav))
+            page.wait_for_function('window.__testDecodeAudioSettled === 1',timeout=5000)
+            page.wait_for_function("document.querySelector('#toast').textContent.includes('Unable to decode audio data')",timeout=5000)
+            unknown_state=page.evaluate("""() => ({
+                calls:window.__testDecodeAudioCalls,
+                uploadVisible:!document.querySelector('#emptyUpload').classList.contains('hidden'),
+                loading:document.querySelector('#loadingScreen').style.display,
+                exportDisabled:document.querySelector('#exportBtn').disabled
+            })""")
+            assert unknown_state['calls']==1, f'unknown WAV subformat was misclassified as PCM by the preflight: {unknown_state}'
+            assert unknown_state['uploadVisible'] and unknown_state['loading']=='none' and unknown_state['exportDisabled'], f'unsupported WAV did not fail cleanly through Web Audio: {unknown_state}'
+            assert console_errors and any('EncodingError' in message for message in console_errors), f'unknown WAV was not sent to the Web Audio decoder: {console_errors}'
+            console_errors.clear()
         page.locator('#fileInput').set_input_files(str(audio_file))
         try:
             page.wait_for_function("document.querySelector('#exportBtn').disabled === false",timeout=45000)
@@ -285,7 +321,7 @@ def main():
                     referenceDisabled:document.querySelector('#refPlayBtn').disabled
                 })""")
                 assert 'iPhone' in ref_guard['toast'] and 'WAV' in ref_guard['toast'], f'combined audio-memory preflight did not reject reference WAV: {ref_guard}'
-                assert ref_guard['decodeCalls']==1, f'reference WAV reached decodeAudioData despite combined memory limit: {ref_guard}'
+                assert ref_guard['decodeCalls']==2, f'reference WAV reached decodeAudioData despite combined memory limit: {ref_guard}'
                 assert ref_guard['vocalStillLoaded'] and ref_guard['referenceDisabled'], f'reference preflight damaged the current vocal session: {ref_guard}'
                 assert len(console_errors)==1 and 'loadReference' in console_errors[0], f'reference memory guard did not report one expected error: {console_errors}'
                 console_errors.clear()
