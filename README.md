@@ -1,8 +1,8 @@
 # Vocal Pitch Editor
 
-## v25 mobile toolbar
+## v27 mobile accessibility
 
-Open, playback, Undo and WAV export are grouped at the start of the toolbar for phone users. This keeps recovery and delivery actions within reach without scrolling through editing tools. The Service Worker cache is v25.
+The pitch roll can receive keyboard focus. Left and right select notes; up and down shift the selected note by one semitone. The selected note's before/after pitch is announced to assistive technology, and active tool states are exposed. On narrow screens, Open, playback, Undo and WAV export stay at the start of the toolbar. The Service Worker cache is v27.
 
 Previous mobile reliability improvements include interrupted-touch rollback and Web Audio unlock before reference playback on iPhone.
 
@@ -17,7 +17,7 @@ Run `npm run check` for syntax checks. Serve over HTTP(S) for Worker/PWA testing
 
 ## Device verification
 
-Automated mobile tests emulate iPhone viewport dimensions and touch in Chromium; they do not prove real iOS Safari behavior. Before calling an iPhone release verified, test Safari and the Add to Home Screen app on a physical device: import WAV and M4A from Files, analyze and edit a note, undo, play vocal/reference, background and resume the app during playback, rotate while dragging, export through Share and Save to Files, then relaunch offline. Record the iPhone model, iOS version, source format/duration and result for each path.
+Automated mobile tests emulate iPhone viewport dimensions and touch in Chromium; they do not prove real iOS Safari behavior. Before calling an iPhone release verified, test Safari and the Add to Home Screen app on a physical device: import WAV and M4A from Files, analyze and edit a note, use VoiceOver and a hardware keyboard to navigate/correct/undo, play vocal/reference, background and resume the app during playback, rotate while dragging, export through Share and Save to Files, then relaunch offline. Record the iPhone model, iOS version, source format/duration and result for each path.
 
 ## QA
 `npm run qa` validates JS syntax plus deterministic F0/noise/dry-path regression tests.

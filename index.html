@@ -80,6 +80,7 @@
   .iconBtn.accent { background: var(--accent); }
   .iconBtn.wide { width: auto; min-width: 62px; padding: 0 12px; gap: 2px; font-size: 14px; font-weight: 600; }
   .iconBtn:disabled { opacity: 0.4; }
+  button:focus-visible, input:focus-visible, #rollCanvas:focus-visible { outline:3px solid #ffe08a; outline-offset:2px; }
   .iconBtn.armed { background: var(--warn); }
   .modeGroup { display: flex; background: var(--panel2); border-radius: 10px; padding: 2px; }
   .modeBtn {
@@ -98,6 +99,7 @@
 
   #rollWrap { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--bg); margin-bottom: env(safe-area-inset-bottom, 0px); }
   #rollCanvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+  .srOnly { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 
   /* floating inspector */
   #inspector {
@@ -277,12 +279,12 @@
       <button class="iconBtn" id="zoomOutBtn" title="縮小" disabled>−<span class="toolLabel">縮小</span></button>
       <button class="iconBtn" id="zoomInBtn" title="拡大" disabled>＋<span class="toolLabel">拡大</span></button>
       <button class="iconBtn" id="fitAllBtn" title="検出した譜面全体を表示" disabled>↔<span class="toolLabel">全体</span></button>
-      <div class="modeGroup" id="modeGroup">
-        <button class="modeBtn active" id="modeNoteBtn" title="ノートツール:音符ごとドラッグ">🎵<span class="toolLabel">ノート</span></button>
-        <button class="modeBtn" id="modeLineBtn" title="ラインツール:ピッチカーブを自由に描く">〰️<span class="toolLabel">ライン</span></button>
+      <div class="modeGroup" id="modeGroup" role="group" aria-label="編集モード">
+        <button class="modeBtn active" id="modeNoteBtn" type="button" aria-pressed="true" title="ノートツール:音符ごとドラッグ">🎵<span class="toolLabel">ノート</span></button>
+        <button class="modeBtn" id="modeLineBtn" type="button" aria-pressed="false" title="ラインツール:ピッチカーブを自由に描く">〰️<span class="toolLabel">ライン</span></button>
       </div>
-      <button class="iconBtn" id="splitBtn" title="分割:タップした位置でノートを2つに分ける" disabled>✂️<span class="toolLabel">分割</span></button>
-      <button class="iconBtn" id="autoPreviewBtn" title="編集のたびに自動で試聴(タップでオン/オフ)">🔈<span class="toolLabel">自動試聴</span></button>
+      <button class="iconBtn" id="splitBtn" aria-pressed="false" title="分割:タップした位置でノートを2つに分ける" disabled>✂️<span class="toolLabel">分割</span></button>
+      <button class="iconBtn" id="autoPreviewBtn" type="button" aria-pressed="false" title="編集のたびに自動で試聴(タップでオン/オフ)">🔈<span class="toolLabel">自動試聴</span></button>
       <button class="iconBtn" id="resetAllBtn" title="全て元に戻す" disabled>↺<span class="toolLabel">リセット</span></button>
       <button class="iconBtn" id="autoCorrectBtn" title="検出した全ノートを現在の補正強度で最寄りの音程へ寄せる" disabled>✨<span class="toolLabel" id="autoCorrectLabel">自動補正 60%</span></button>
       <button class="iconBtn" id="refBtn" title="リファレンス(お手本)音源を読み込む" disabled>🎯<span class="toolLabel">お手本</span></button>
@@ -290,7 +292,7 @@
       <button class="iconBtn wide" id="applyAllBtn" title="すべての候補を適用" disabled>✓<span class="toolLabel">候補適用</span></button>
       <div class="spacer"></div>
     </div>
-    <div id="interactionGuide">
+    <div id="interactionGuide" role="status" aria-live="polite" aria-atomic="true">
       <span class="guideMode" id="guideMode">ノート</span>
       <span class="guideText" id="guideText">ノートを上下ドラッグで半音移動・タップで微調整</span>
     </div>
@@ -304,7 +306,10 @@
           <div id="emptyUploadHint">音源は端末内で処理されます</div>
         </div>
       </div>
-      <canvas id="rollCanvas"></canvas>
+      <canvas id="rollCanvas" role="region" tabindex="0" aria-label="ピッチ編集ロール。左右矢印キーでノート選択、上下矢印キーで選択中ノートを半音変更。タップやドラッグでも編集できます。">
+        ピッチ編集ロール。左右矢印キーでノート選択、上下矢印キーで選択中ノートを半音変更します。
+      </canvas>
+      <div id="a11yStatus" class="srOnly" role="status" aria-live="polite" aria-atomic="true"></div>
       <div id="inspector">
         <div class="head"><span class="noteName" id="inspNote">C4</span><button class="closeX" id="inspClose">×</button></div>
         <div class="offsetLine" id="inspOffset">±0¢</div>
@@ -336,7 +341,7 @@
         </div>
         <button class="resetBtn" id="inspReset">このノートをリセット</button>
       </div>
-      <div id="toast"></div>
+      <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
     </div>
   </div>
 

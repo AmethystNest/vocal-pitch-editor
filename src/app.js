@@ -124,6 +124,7 @@
   const strengthRange = $('strengthRange'), strengthValue = $('strengthValue');
   const strengthPresets = $('strengthPresets'), autoCorrectBtn = $('autoCorrectBtn'), autoCorrectLabel = $('autoCorrectLabel');
   const toast = $('toast');
+  const a11yStatus = $('a11yStatus');
   const guideMode = $('guideMode');
   const guideText = $('guideText');
 
@@ -139,6 +140,10 @@
       guideMode.textContent = 'ノート';
       guideText.textContent = 'タップで詳細 / 上下ドラッグでピッチ移動 / 横スワイプで移動 / 2本指でズーム';
     }
+    const noteMode = $('modeNoteBtn'), lineMode = $('modeLineBtn'), splitButton = $('splitBtn');
+    if (noteMode) noteMode.setAttribute('aria-pressed', String(S.mode === 'note' && !S.splitArmed));
+    if (lineMode) lineMode.setAttribute('aria-pressed', String(S.mode === 'line' && !S.splitArmed));
+    if (splitButton) splitButton.setAttribute('aria-pressed', String(!!S.splitArmed));
   }
 
   // ============================================================
@@ -1401,6 +1406,34 @@
     }
   });
 
+  canvas.addEventListener('keydown', (e) => {
+    if (!S.segments || !S.segments.length || S.mode !== 'note' || S.splitArmed ||
+        e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const ordered = S.segments.slice().sort((a, b) => a.startTime - b.startTime);
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      const current = ordered.findIndex(seg => seg.id === S.selectedSegId);
+      const direction = e.key === 'ArrowRight' ? 1 : -1;
+      const next = current < 0 ? (direction > 0 ? 0 : ordered.length - 1) :
+        Math.max(0, Math.min(ordered.length - 1, current + direction));
+      showInspectorForSegment(ordered[next].id);
+      render();
+      return;
+    }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      const seg = ordered.find(item => item.id === S.selectedSegId);
+      if (!seg) return;
+      e.preventDefault();
+      const snapshot = rememberBeforeEdit();
+      normalizeSegmentShift(seg, currentShift(seg) + (e.key === 'ArrowUp' ? 1 : -1));
+      pushUndoSnapshot(snapshot);
+      updateInspector();
+      render();
+      S.previewSegId = seg.id;
+      scheduleResynth(seg.id);
+    }
+  });
+
   canvas.addEventListener('pointermove', (e) => {
     if (pinchActive || e.pointerId !== activePointerId) return;
     const rect = canvas.getBoundingClientRect();
@@ -1612,6 +1645,7 @@
     if (!btn) return;
     btn.disabled = !S.segments || S.undoStack.length === 0;
     btn.title = `1つ前の編集に戻る（残り ${S.undoStack.length} / ${S.undoLimit}）`;
+    btn.setAttribute('aria-label', btn.disabled ? '元に戻す。取り消せる編集はありません' : `元に戻す。取り消せる編集 ${S.undoStack.length} 件`);
   }
 
   function pushUndoSnapshot(snapshot) {
@@ -1695,6 +1729,8 @@
     S.mode = mode;
     $('modeNoteBtn').classList.toggle('active', mode === 'note');
     $('modeLineBtn').classList.toggle('active', mode === 'line');
+    $('modeNoteBtn').setAttribute('aria-pressed', String(mode === 'note'));
+    $('modeLineBtn').setAttribute('aria-pressed', String(mode === 'line'));
     updateInteractionGuide();
   }
   $('modeNoteBtn').addEventListener('click', () => setMode('note'));
@@ -1707,6 +1743,7 @@
   $('autoPreviewBtn').addEventListener('click', () => {
     S.autoPreviewEnabled = !S.autoPreviewEnabled;
     $('autoPreviewBtn').classList.toggle('accent', S.autoPreviewEnabled);
+    $('autoPreviewBtn').setAttribute('aria-pressed', String(S.autoPreviewEnabled));
     $('autoPreviewBtn').innerHTML = `${S.autoPreviewEnabled ? '🔊' : '🔈'}<span class="toolLabel">自動試聴</span>`;
     toastMsg(S.autoPreviewEnabled ? '編集後の自動試聴: オン' : '編集後の自動試聴: オフ');
   });
@@ -1940,6 +1977,7 @@
     inspector.classList.remove('show');
     inspector.setAttribute('aria-hidden', 'true');
     inspector.style.display = 'none';
+    if (a11yStatus) a11yStatus.textContent = '';
   }
 
   function showInspectorForSegment(id) {
@@ -1985,6 +2023,9 @@
     inspBefore.textContent = pitchStatLabel(beforeMidi);
     inspAfter.textContent = pitchStatLabel(afterMidi);
     inspTarget.textContent = PE.midiToNoteName(targetMidi);
+    if (a11yStatus) {
+      a11yStatus.textContent = `選択中 ${PE.midiToNoteName(targetMidi)}。補正前 ${pitchStatLabel(beforeMidi)}、補正後 ${pitchStatLabel(afterMidi)}、目標 ${PE.midiToNoteName(targetMidi)}。左右矢印でノート選択、上下矢印で半音変更できます。`;
+    }
     const hasRef = suggestionDiffersEnough(seg);
     inspRef.disabled = !hasRef;
     inspRef.textContent = hasRef ? `お手本候補 ${PE.midiToNoteName(Math.round(seg.refSuggestMidi))}` : 'お手本候補なし';

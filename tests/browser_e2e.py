@@ -207,6 +207,12 @@ def main():
             assert metrics['essentialButtonsVisible'], f'essential mobile controls are not visible: {metrics}'
             unnamed_buttons=page.locator('#topbar button:not([aria-label])').evaluate_all("els => els.filter(el => !(el.getAttribute('title') || el.querySelector('.toolLabel')?.textContent?.trim())).map(el => el.id)")
             assert not unnamed_buttons, f'mobile toolbar has unnamed buttons: {unnamed_buttons}'
+            assert page.locator('#interactionGuide').get_attribute('aria-live')=='polite', 'interaction guide is not announced'
+            assert page.locator('#rollCanvas').get_attribute('tabindex')=='0', 'pitch canvas is not keyboard focusable'
+            page.locator('#modeLineBtn').tap()
+            assert page.locator('#modeLineBtn').get_attribute('aria-pressed')=='true', 'line tool state was not exposed'
+            page.locator('#modeNoteBtn').tap()
+            assert page.locator('#modeNoteBtn').get_attribute('aria-pressed')=='true', 'note tool state was not exposed'
         page.locator('#fileInput').set_input_files(str(audio_file))
         try:
             page.wait_for_function("document.querySelector('#exportBtn').disabled === false",timeout=45000)
@@ -240,6 +246,16 @@ def main():
             # Select the fixture's centered A3 note through the real canvas
             # pointer path, make a small correction, and restore it with Undo.
             canvas=page.locator('#rollCanvas')
+            canvas.focus()
+            canvas.press('ArrowRight')
+            page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
+            assert page.locator('#a11yStatus').text_content().startswith('選択中 '), 'keyboard note selection was not announced'
+            keyboard_offset=page.locator('#inspOffset').inner_text()
+            canvas.press('ArrowUp')
+            page.wait_for_function("document.querySelector('#undoBtn').disabled === false",timeout=5000)
+            assert page.locator('#inspOffset').inner_text()!=keyboard_offset, 'keyboard pitch correction did not change the selected note'
+            page.locator('#undoBtn').tap()
+            page.wait_for_function("document.querySelector('#undoBtn').disabled === true",timeout=5000)
             canvas_box=canvas.bounding_box()
             assert canvas_box and canvas_box['width']>0 and canvas_box['height']>0
             canvas.tap(position={'x':canvas_box['width']/2,'y':canvas_box['height']/2})
