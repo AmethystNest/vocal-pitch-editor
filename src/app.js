@@ -2088,6 +2088,10 @@
 
   a11yPreviousNote.addEventListener('click', () => selectNoteByDirection(-1));
   a11yNextNote.addEventListener('click', () => selectNoteByDirection(1));
+  accessibleNoteNav.addEventListener('focusin', () => editorScreen.classList.add('a11y-note-nav-focused'));
+  accessibleNoteNav.addEventListener('focusout', (event) => {
+    if (!accessibleNoteNav.contains(event.relatedTarget)) editorScreen.classList.remove('a11y-note-nav-focused');
+  });
 
   function showInspectorForSegment(id) {
     const seg = S.segments && S.segments.find ? S.segments.find(s => s.id === id) : null;
