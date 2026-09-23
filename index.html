@@ -172,7 +172,7 @@
   #interactionGuide .guideMode { color: var(--accent2); font-weight: 750; flex: 0 0 auto; }
   #interactionGuide .guideText { overflow: hidden; text-overflow: ellipsis; }
 
-  @media (max-width: 700px) {
+  @media (max-width: 700px), (max-height:500px) and (pointer:coarse) {
     #topbar { gap: 5px; padding-left: 6px; padding-right: 6px; }
     .iconBtn { width: 52px; min-width: 52px; height: 48px; border-radius: 9px; }
     .modeBtn { width: 47px; height: 44px; }
@@ -181,7 +181,7 @@
       position: absolute; left: 8px; right: 8px; top: auto;
       bottom: max(8px, env(safe-area-inset-bottom));
       min-width: 0; padding: 10px 12px 12px; border-radius: 16px;
-      max-height:100%; overflow-y:auto; overscroll-behavior:contain;
+      max-height:calc(100dvh - 108px - env(safe-area-inset-bottom)); overflow-y:auto; overscroll-behavior:contain;
       background: rgba(30,33,42,.985); backdrop-filter: blur(10px);
       box-shadow: 0 -8px 28px rgba(0,0,0,.34);
     }
@@ -213,7 +213,7 @@
   .inspLegend span { display:flex; align-items:center; gap:4px; }
   .legendLine { width:18px; height:0; border-top:2px solid rgba(255,255,255,.82); }
   .legendLine.before { border-top-style:dashed; border-top-color:rgba(126,138,158,.9); }
-  @media (max-width:700px) {
+  @media (max-width:700px), (max-height:500px) and (pointer:coarse) {
     .pitchSummary { gap:5px; margin-top:5px; }
     .pitchStat { padding:6px 4px; }
     .pitchStat .v { font-size:11px; }
@@ -259,7 +259,7 @@
   #inspector { display:none; opacity:0; pointer-events:none; transform:translateY(8px); transition:opacity .14s ease, transform .14s ease; }
   #inspector.show { display:block; opacity:1; pointer-events:auto; transform:translateY(0); }
 
-  @media (max-width:700px) {
+  @media (max-width:700px), (max-height:500px) and (pointer:coarse) {
     #inspector .closeX { width:44px; height:44px; flex:0 0 44px; }
     #inspector .rowBtns { gap:2px; }
     #inspector .rowBtns button, #inspector .resetBtn, .playSegBtn,

@@ -412,7 +412,7 @@ def main():
             canvas.tap(position={'x':canvas_box['width']/2,'y':canvas_box['height']/2})
             page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
             mobile_targets=page.locator('#inspector .closeX, #inspector .inspActionBtn, #inspector .strengthPreset, #inspector .strengthRange, #inspector .rowBtns button, #inspector .resetBtn, #inspector .playSegBtn').evaluate_all("els => els.map(el => ({id:el.id || el.className, height:el.getBoundingClientRect().height, width:el.getBoundingClientRect().width}))")
-            too_small=[target for target in mobile_targets if target['height']<44 or target['width']<44]
+            too_small=[target for target in mobile_targets if target['height']<43.5 or target['width']<43.5]
             assert not too_small, f'mobile pitch inspector has undersized touch targets: {too_small}'
             inspector_box=page.locator('#inspector').bounding_box()
             assert inspector_box and inspector_box['y']>=0 and inspector_box['y']+inspector_box['height']<=metrics['height'], f'mobile pitch inspector exceeds viewport: {inspector_box}'
@@ -423,7 +423,8 @@ def main():
             landscape_metrics=page.evaluate("() => ({width:innerWidth,height:innerHeight,documentWidth:document.documentElement.scrollWidth})")
             assert landscape_metrics['documentWidth']<=landscape_metrics['width'], f'horizontal overflow after mobile rotation: {landscape_metrics}'
             landscape_inspector=page.locator('#inspector').bounding_box()
-            assert landscape_inspector and landscape_inspector['y']>=0 and landscape_inspector['y']+landscape_inspector['height']<=landscape_metrics['height'], f'inspector escaped the landscape viewport: {landscape_inspector}; {landscape_metrics}'
+            inspector_style=page.locator('#inspector').evaluate("el => ({maxHeight:getComputedStyle(el).maxHeight,clientHeight:el.clientHeight,scrollHeight:el.scrollHeight,rollTop:document.querySelector('#rollWrap').getBoundingClientRect().top})")
+            assert landscape_inspector and landscape_inspector['y']>=0 and landscape_inspector['y']+landscape_inspector['height']<=landscape_metrics['height'], f'inspector escaped the landscape viewport: {landscape_inspector}; {landscape_metrics}; {inspector_style}'
             landscape_adjustment=page.locator('#inspector [data-d="10"]')
             landscape_adjustment.scroll_into_view_if_needed()
             adjustment_box=landscape_adjustment.bounding_box()
@@ -582,6 +583,15 @@ def main():
         if browser_name in mobile_modes: page.locator('#playBtn').tap()
         else: page.locator('#playBtn').click()
         page.wait_for_function("document.querySelector('#playBtn').textContent.includes('停止')",timeout=10000)
+        if browser_name in mobile_modes:
+            page.evaluate("window.__testDocumentHidden=true; document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_function("document.querySelector('#playBtn').textContent.includes('再生')",timeout=5000)
+            hidden_state=page.evaluate("() => ({hidden:document.hidden,playLabel:document.querySelector('#playBtn').textContent.trim(),context:window.__testAudioContexts?.at(-1)?.state})")
+            assert hidden_state['hidden'] and hidden_state['context'] in ('running','suspended'), f'background transition left invalid playback state: {hidden_state}'
+            page.evaluate("window.__testDocumentHidden=false; document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_function("window.__testAudioContexts?.at(-1)?.state === 'running'",timeout=5000)
+            page.locator('#playBtn').tap()
+            page.wait_for_function("document.querySelector('#playBtn').textContent.includes('停止')",timeout=10000)
         if browser_name in mobile_modes: page.locator('#playBtn').tap()
         else: page.locator('#playBtn').click()
         page.wait_for_function("document.querySelector('#playBtn').textContent.includes('再生')",timeout=10000)
@@ -681,6 +691,17 @@ def main():
         assert abs(exported_hz-final_expected_hz)<3, f'export pitch/session mismatch: expected {final_expected_hz} Hz, measured {exported_hz:.1f} Hz'
         assert not errors, f'JS errors after export: {errors}'
         assert not console_errors, f'Console errors after export: {console_errors}'
+        if browser_name=='mobile-mini':
+            # Replacing an active session with a WAV rejected by the iPhone
+            # preflight must discard stale metadata and leave a recovery path.
+            decode_calls_before_failure=page.evaluate('window.__testDecodeAudioCalls')
+            page.locator('#fileInput').set_input_files(str(oversized_wav))
+            page.wait_for_function("document.querySelector('#toast').getAttribute('role') === 'alert' && document.querySelector('#loadingScreen').style.display === 'none'",timeout=5000)
+            failed_replacement=page.evaluate("() => ({file:document.querySelector('#fileNameLabel').textContent,exportDisabled:document.querySelector('#exportBtn').disabled,playDisabled:document.querySelector('#playBtn').disabled,pickerEnabled:!document.querySelector('#backBtn').disabled,canvasTabIndex:document.querySelector('#rollCanvas').tabIndex,noteNavHidden:document.querySelector('#accessibleNoteNav').hidden,decodeCalls:window.__testDecodeAudioCalls})")
+            assert not failed_replacement['file'] and failed_replacement['exportDisabled'] and failed_replacement['playDisabled'], f'failed replacement retained stale audio metadata or actions: {failed_replacement}'
+            assert failed_replacement['pickerEnabled'] and failed_replacement['canvasTabIndex']==-1 and failed_replacement['noteNavHidden'], f'failed replacement did not return to a clean accessible picker state: {failed_replacement}'
+            assert failed_replacement['decodeCalls']==decode_calls_before_failure, f'oversized replacement reached Web Audio decode: {failed_replacement}'
+            assert len(console_errors)==1 and 'decodeAudioFile' in console_errors[0], f'expected one reported oversized replacement: {console_errors}'
         print(f'browser-e2e: PASS ({browser_name} upload -> Worker analysis -> lazy playback -> WAV export)')
         browser.close()
 

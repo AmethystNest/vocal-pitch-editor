@@ -409,6 +409,10 @@
 
   function releaseAudioMemory() {
     S.audioSessionId++;
+    S.analysisDownsampled = false;
+    S.analysisSampleRate = null;
+    S.fileBaseName = 'audio';
+    $('fileNameLabel').textContent = '';
     clearTimeout(S.resynthTimer);
     S.resynthTimer = null;
     S.pendingFullResynth = false;
