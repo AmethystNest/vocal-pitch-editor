@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v40 accessible note position
+
+VoiceOver and keyboard note navigation announce the selected note's position in the analyzed sequence. The Service Worker cache is v40 so installed browsers refresh the updated app shell and audio editor code.
+
 ## v39 audio-session recovery
 
 When an imported track is replaced, audio metadata including the filename and iPhone low-memory analysis indicator is cleared with the released buffers. A failed oversized replacement now returns to a clean, accessible picker without stale track details or an unnecessary decode. Mobile E2E also moves playback into the background, checks the safe stopped state, restores the AudioContext, and starts playback again. Touch devices use the mobile editing panel in landscape even when the CSS viewport is wider than 700px; the panel stays within the actual viewport height. The Service Worker cache is v39.
