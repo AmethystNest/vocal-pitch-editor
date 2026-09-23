@@ -412,6 +412,17 @@
     return (audioPersistent + analysisAndScratch) / (1024 * 1024);
   }
 
+  function estimateLiveAudioMemoryMB() {
+    if (!S.origChannels || !S.origChannels[0]) return 0;
+    const frames = S.origChannels[0].length;
+    const originalCopies = 1 + (S.editedChannels ? 1 : 0) + (S.editedBuffer ? 1 : 0);
+    const mainBytes = frames * Math.max(1, S.numCh) * 4 * originalCopies;
+    const referenceBytes = S.referenceBuffer
+      ? S.referenceBuffer.length * S.referenceBuffer.numberOfChannels * 4
+      : 0;
+    return (mainBytes + referenceBytes) / (1024 * 1024);
+  }
+
   function yinOptsForSampleRate(sr) {
     // Preserve roughly 43-47 ms analysis windows and 10-12 ms hops
     // across 22.05/44.1/48 kHz. This avoids losing timing resolution
@@ -581,14 +592,26 @@
       const decoded = await decodeAudioFile(file);
       if (audioSessionId !== S.audioSessionId) return;
       const durationSec = decoded.duration || (decoded.length / decoded.sampleRate);
+      if (IS_IOS) {
+        const combinedMemMB = estimateLiveAudioMemoryMB() + estimateDecodedMemoryMB(decoded);
+        if (combinedMemMB > 430) {
+          throw new Error('ボーカルとお手本を合わせた音源サイズがiPhoneのメモリ上限に近いため読み込めません。短いお手本音源をお試しください。');
+        }
+        if (combinedMemMB > 260) {
+          toastMsg('大きい音源です。解析中はほかのアプリを閉じると安定します。', 4000);
+        }
+      }
       let refMono;
       // Reuse the iPhone analysis path used by the main vocal: a full-rate
       // Float64 reference can add tens of MB while the vocal's original and
       // edited PCM are already resident. Long references only need F0/DTW at
       // analysis rate; keep the decoded AudioBuffer full-rate for playback.
-      const refMonoFull = makeMonoForAnalysis(decoded);
+      let refMonoFull = makeMonoForAnalysis(decoded);
       const refAnalysis = prepareAnalysisSignal(refMonoFull, decoded.sampleRate, durationSec);
       refMono = refAnalysis.signal;
+      // A long-file downsample is independent. Release its full-rate mono
+      // precursor before sending analysis to the Worker on memory-tight iOS.
+      if (refAnalysis.signal !== refMonoFull) refMonoFull = null;
       const vocalSegsPlain = S.segments.map((s) => ({ startTime: s.startTime, endTime: s.endTime, startFrame: s.startFrame, endFrame: s.endFrame, noteMidi: s.noteMidi }));
       const res = await workerCall(
         { type: 'reference', refSignal: refMono, refSr: refAnalysis.sr, opts: yinOptsForSampleRate(refAnalysis.sr), vocalPitchTrack: S.pitchTrack, vocalSegments: vocalSegsPlain },
@@ -609,7 +632,8 @@
     } catch (err) {
       if (audioSessionId !== S.audioSessionId) return;
       console.error(err);
-      toastMsg('リファレンスを読み込めませんでした。iPhoneでは WAV / MP3 / M4A(AAC) を推奨します。', 4500);
+      const detail = err && err.message ? ` (${err.message})` : '';
+      toastMsg(`リファレンスを読み込めませんでした。iPhoneでは WAV / MP3 / M4A(AAC) を推奨します。${detail}`, 5000);
     } finally {
       // Do not let an obsolete reference request re-enable controls owned by
       // a newer main-audio session.

@@ -23,7 +23,7 @@ Windows + Playwright Chromiumで `npm run test:browser` 相当のE2Eを実行し
 
 `BROWSER=mobile` を指定すると、390×844・DPR 3・タッチ有効・iPhone User-AgentのChromiumで、横はみ出し、音源読込、ノート選択、±10¢補正とUndo、ノート分割とUndo、二本指ピンチ、再生、WAV書き出しを検証できる。`BROWSER=mobile-long` は75.2秒音源でiPhone向けダウンサンプル解析を含めて検証する。Windows PowerShellでは `$env:BROWSER='mobile'; python tests/browser_e2e.py` または `$env:BROWSER='mobile-long'; python tests/browser_e2e.py` を実行する。これはiPhone実機Safariの代替ではない。
 
-`BROWSER=mobile-se` は375×667・DPR 2のコンパクト画面でタッチ編集と二本指ズームを検証する。`BROWSER=pwa-offline` は一時的な自己署名HTTPSサーバーでService Workerを登録し、オフライン再読込後の音源解析・再生・書き出しまで検証する。HTTPS試験にはPythonの`cryptography`パッケージが必要。どちらもChromiumによる自動テストで、iPhone実機Safariの最終確認は別途必要。
+`BROWSER=mobile-se` は375×667・DPR 2のコンパクト画面でタッチ編集、二本指ズーム、お手本音源解析・再生を検証する。iPhoneではボーカルとお手本を合わせたメモリ見積りが上限に近い場合に参照音源を拒否し、理由を表示する。`BROWSER=pwa-offline` は一時的な自己署名HTTPSサーバーでService Workerを登録し、オフライン再読込後の音源解析・再生・書き出しまで検証する。HTTPS試験にはPythonの`cryptography`パッケージが必要。どちらもChromiumによる自動テストで、iPhone実機Safariの最終確認は別途必要。
 
 `BROWSER=webkit` はPlaywright WebKitの390×844モバイルシェルと横はみ出しを検証する。Windows配布のPlaywright WebKitにWeb Audio APIがない環境では、音声処理を実行せず部分PASSとして明示する。この結果はiPhone Safari音声対応の判定には使えない。
 
