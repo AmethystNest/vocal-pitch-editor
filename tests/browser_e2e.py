@@ -1,5 +1,7 @@
 """Real browser smoke test: file upload -> analysis -> WAV export.
-Set BROWSER=webkit for Safari-engine coverage. Does not replace iPhone hardware testing.
+Set BROWSER=webkit for Safari-engine coverage or BROWSER=mobile for an iPhone-sized,
+touch-enabled Chromium run through the iOS-specific application path. Neither
+browser mode replaces iPhone hardware testing.
 """
 from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -48,6 +50,20 @@ def main():
                 'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 '
                 'Mobile/15E148 Safari/604.1'
             )
+        elif browser_name=='mobile':
+            # Chromium supplies working Web Audio on this host while the iPhone
+            # user agent exercises the app's iOS memory-first code paths.
+            context_args.update(
+                viewport={'width':390,'height':844},
+                device_scale_factor=3,
+                is_mobile=True,
+                has_touch=True,
+                user_agent=(
+                    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) '
+                    'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 '
+                    'Mobile/15E148 Safari/604.1'
+                ),
+            )
         context=browser.new_context(**context_args)
         page=context.new_page()
         errors=[]
@@ -55,6 +71,16 @@ def main():
         page.on('pageerror',lambda e:errors.append(str(e)))
         page.on('console',lambda m: console_errors.append(m.text) if m.type=='error' else None)
         page.goto(url,wait_until='load',timeout=30000)
+        if browser_name=='mobile':
+            metrics=page.evaluate("""() => ({
+                width: innerWidth,
+                height: innerHeight,
+                documentWidth: document.documentElement.scrollWidth,
+                touchPoints: navigator.maxTouchPoints
+            })""")
+            assert metrics['width']==390 and metrics['height']==844, f'mobile viewport mismatch: {metrics}'
+            assert metrics['documentWidth']<=metrics['width'], f'horizontal overflow on mobile: {metrics}'
+            assert metrics['touchPoints']>0, f'touch input unavailable: {metrics}'
         page.locator('#fileInput').set_input_files(str(wav))
         try:
             page.wait_for_function("document.querySelector('#exportBtn').disabled === false",timeout=45000)
@@ -75,15 +101,18 @@ def main():
         # Import intentionally leaves the full-song AudioBuffer unmaterialized
         # to reduce iPhone peak memory. Exercise Play so the lazy playback path
         # is covered by the browser test rather than only by static inspection.
-        page.locator('#playBtn').click()
+        if browser_name=='mobile': page.locator('#playBtn').tap()
+        else: page.locator('#playBtn').click()
         page.wait_for_function("document.querySelector('#playBtn').textContent.includes('停止')",timeout=10000)
-        page.locator('#playBtn').click()
+        if browser_name=='mobile': page.locator('#playBtn').tap()
+        else: page.locator('#playBtn').click()
         page.wait_for_function("document.querySelector('#playBtn').textContent.includes('再生')",timeout=10000)
         assert not errors, f'JS errors after playback: {errors}'
         assert not console_errors, f'Console errors after playback: {console_errors}'
         # Exercise the actual export UI and validate WAV container/length.
         with page.expect_download(timeout=45000) as info:
-            page.locator('#exportBtn').click()
+            if browser_name=='mobile': page.locator('#exportBtn').tap()
+            else: page.locator('#exportBtn').click()
         download=info.value
         target=Path(temp)/'export.wav';download.save_as(target)
         with wave.open(str(target),'rb') as f:
