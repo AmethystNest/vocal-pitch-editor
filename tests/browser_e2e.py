@@ -78,6 +78,12 @@ def main():
         struct.pack_into('<4sI4s4sIHHIIHH4sI',header,0,
             b'RIFF',57_600_036,b'WAVE',b'fmt ',16,1,2,48_000,192_000,4,16,b'data',57_600_000)
         oversized_wav.write_bytes(header)
+        combined_oversized_wav=Path(temp)/'combined-oversized.wav'
+        ref_bytes=196*48_000*4
+        ref_header=bytearray(44)
+        struct.pack_into('<4sI4s4sIHHIIHH4sI',ref_header,0,
+            b'RIFF',36+ref_bytes,b'WAVE',b'fmt ',16,1,2,48_000,192_000,4,16,b'data',ref_bytes)
+        combined_oversized_wav.write_bytes(ref_header)
         audio_file=wav
         if browser_name in ('mobile-mp3','mobile-m4a'):
             ffmpeg=os.environ.get('FFMPEG_PATH') or shutil.which('ffmpeg')
@@ -266,9 +272,23 @@ def main():
             assert page.locator('#fileInput').evaluate('(input) => input.value') == '', 'main file picker value was not cleared after selection'
         assert not errors, f'JS errors: {errors}'
         assert not console_errors, f'Console errors: {console_errors}'
-        if browser_name in ('mobile','mobile-se','mobile-cycle'):
+        if browser_name in ('mobile','mobile-se','mobile-mini','mobile-cycle'):
             # A short iPhone-UA guide exercises the combined-memory guard,
             # transferred mono analysis PCM, and full-rate reference playback.
+            if browser_name=='mobile-mini':
+                page.locator('#refFileInput').set_input_files(str(combined_oversized_wav))
+                page.wait_for_function("document.querySelector('#refBtn').disabled === false && document.querySelector('#toast').style.display === 'block'",timeout=5000)
+                ref_guard=page.evaluate("""() => ({
+                    toast:document.querySelector('#toast').textContent,
+                    decodeCalls:window.__testDecodeAudioCalls,
+                    vocalStillLoaded:!document.querySelector('#exportBtn').disabled,
+                    referenceDisabled:document.querySelector('#refPlayBtn').disabled
+                })""")
+                assert 'iPhone' in ref_guard['toast'] and 'WAV' in ref_guard['toast'], f'combined audio-memory preflight did not reject reference WAV: {ref_guard}'
+                assert ref_guard['decodeCalls']==1, f'reference WAV reached decodeAudioData despite combined memory limit: {ref_guard}'
+                assert ref_guard['vocalStillLoaded'] and ref_guard['referenceDisabled'], f'reference preflight damaged the current vocal session: {ref_guard}'
+                assert len(console_errors)==1 and 'loadReference' in console_errors[0], f'reference memory guard did not report one expected error: {console_errors}'
+                console_errors.clear()
             page.locator('#refFileInput').set_input_files(str(wav))
             page.wait_for_function("document.querySelector('#refPlayBtn').disabled === false",timeout=30000)
             assert not errors, f'JS errors after reference analysis: {errors}'

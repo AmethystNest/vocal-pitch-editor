@@ -646,6 +646,12 @@
     toastMsg('リファレンスを解析中...', 5000);
     $('refBtn').disabled = true;
     try {
+      if (IS_IOS) {
+        const estimatedMB = await estimateWavMemoryMB(file, S.audioCtx?.sampleRate || S.sr);
+        if (estimatedMB != null && estimateLiveAudioMemoryMB() + estimatedMB > 430) {
+          throw new Error('ボーカルとお手本を合わせた音源はiPhoneのメモリ上限に近いため読み込めません。短いお手本音源をお試しください。');
+        }
+      }
       const decoded = await decodeAudioFile(file);
       if (audioSessionId !== S.audioSessionId) return;
       const durationSec = decoded.duration || (decoded.length / decoded.sampleRate);
