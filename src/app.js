@@ -648,8 +648,11 @@
   // mapped through the DTW alignment (falls back to the reference's own
   // start if no alignment is available yet, or the mapped position would
   // be past its end).
-  function playReference() {
+  async function playReference() {
     if (!S.referenceBuffer) return;
+    // iOS Safari requires a user activation to resume Web Audio. Await the
+    // same unlock path used by main playback before starting this source.
+    await unlockAudio();
     stopReference();
     if (S.playing) stopPlayback();
     const vocalT = getPlayheadTime();
@@ -658,7 +661,6 @@
       refT = mapVocalTimeToRefTime(vocalT, S.refAlignXs, S.refAlignYs);
     }
     refT = Math.max(0, Math.min(refT, S.referenceBuffer.duration - 0.01));
-    if (S.audioCtx.state === 'suspended') S.audioCtx.resume();
     const src = S.audioCtx.createBufferSource();
     src.buffer = S.referenceBuffer;
     src.connect(S.audioCtx.destination);
@@ -696,8 +698,15 @@
     if (!S.refPlaying) return S.refPlayStartRefTime;
     return S.refPlayStartRefTime + (S.audioCtx.currentTime - S.refPlayStartCtxTime);
   }
-  $('refPlayBtn').addEventListener('click', () => {
-    if (S.refPlaying) stopReference(); else playReference();
+  $('refPlayBtn').addEventListener('click', async () => {
+    if (S.refPlaying) stopReference();
+    else {
+      try { await playReference(); }
+      catch (err) {
+        console.error(err);
+        toastMsg('Safariで参照音声を再生できませんでした。もう一度タップしてください。', 3500);
+      }
+    }
   });
 
   function suggestionDiffersEnough(seg) {
