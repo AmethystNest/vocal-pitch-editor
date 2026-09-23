@@ -1538,10 +1538,12 @@
         if (Math.abs(dx) > Math.abs(dy) * 1.25) {
           const startView = S.dragging.startView;
           S.dragging = null;
+          const originView = Math.max(0, startView - dx / S.pxPerSec);
           S.panning = {
             mode: 'pan', startX: px, startY: py,
-            startView: Math.max(0, startView - dx / S.pxPerSec),
-            startMinMidi: S.minMidi, startMaxMidi: S.maxMidi
+            startView: originView,
+            startMinMidi: S.minMidi, startMaxMidi: S.maxMidi,
+            originView, originMinMidi: S.minMidi, originMaxMidi: S.maxMidi
           };
           render();
           return;
@@ -1594,9 +1596,9 @@
       updateUndoBtn();
     }
     if (S.panning && S.panning.mode === 'pan') {
-      S.viewStartSec = S.panning.startView;
-      S.minMidi = S.panning.startMinMidi;
-      S.maxMidi = S.panning.startMaxMidi;
+      S.viewStartSec = S.panning.originView ?? S.panning.startView;
+      S.minMidi = S.panning.originMinMidi ?? S.panning.startMinMidi;
+      S.maxMidi = S.panning.originMaxMidi ?? S.panning.startMaxMidi;
     } else if (S.panning && S.panning.mode === 'seek') {
       seekTo(S.playStartOffsetSec);
     }

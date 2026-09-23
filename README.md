@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v45 cancelled horizontal pan recovery
+
+Cancelling a horizontal swipe that begins on a note now restores the original viewport, including when iOS interrupts the gesture during rotation, backgrounding, or page teardown. The compact mobile E2E exercises all three interruption paths. The Service Worker cache is v45.
+
 ## v44 reduced motion
 
 When iOS or the browser requests reduced motion, the loading spinner becomes static and the pitch inspector skips its entrance transition. The 320×568 mobile E2E verifies both styles under the reduced-motion preference. The Service Worker cache is v44.

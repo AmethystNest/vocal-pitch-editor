@@ -594,13 +594,14 @@ def main():
                 after_cancel=page.evaluate(signature)
                 assert after_cancel==before_cancel, 'cancelled touch left a partial note or pan edit behind'
                 assert page.evaluate("!!document.querySelector('#rollCanvas').matches(':active')") is False, 'canvas remained active after cancelled touch'
-                # Safari may transition or rotate without delivering the
-                # pointercancel that a standard drag relies on. Those page
-                # lifecycle events must independently retire the gesture.
+                # A horizontal swipe beginning on a note changes into a pan
+                # after the drag threshold. Cancelling that gesture must put
+                # the viewport back where it started, even though the pan
+                # origin is shifted to keep the note finger-anchored.
                 for interruption in ('visibilitychange','orientationchange','pagehide'):
                     before_interrupt=page.evaluate(signature)
                     cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':[{'x':cancel_x,'y':cancel_y,'id':10}]})
-                    cdp.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[{'x':cancel_x,'y':cancel_y-45,'id':10}]})
+                    cdp.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[{'x':cancel_x-45,'y':cancel_y,'id':10}]})
                     during_interrupt=page.evaluate(signature)
                     assert during_interrupt!=before_interrupt, f'{interruption} fixture did not start a moved gesture'
                     if interruption=='visibilitychange':
@@ -612,9 +613,8 @@ def main():
                     cdp.send('Input.dispatchTouchEvent',{'type':'touchCancel','touchPoints':[]})
                     page.wait_for_timeout(250 if interruption=='orientationchange' else 100)
                     after_interrupt=page.evaluate(signature)
-                    if interruption=='visibilitychange':
-                        assert after_interrupt==before_interrupt, f'{interruption} left a partial pitch or pan edit behind'
-                    elif interruption=='orientationchange':
+                    assert after_interrupt==before_interrupt, f'{interruption} left a partial pitch or pan edit behind'
+                    if interruption=='orientationchange':
                         geometry=page.evaluate("""() => {const c=document.querySelector('#rollCanvas'),r=c.getBoundingClientRect();return {canvas:[c.width,c.height],rect:[r.width,r.height],viewport:[innerWidth,innerHeight]}}""")
                         assert geometry['rect']==[canvas_box['width'],canvas_box['height']], f'orientationchange left a stale canvas size: {geometry}'
                     assert page.locator('#undoBtn').is_disabled(), f'{interruption} created an Undo entry'
