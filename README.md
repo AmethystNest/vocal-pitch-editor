@@ -1,8 +1,8 @@
 # Vocal Pitch Editor v23
 
-## v23 iOS reference playback
+## v24 iOS interaction and reference playback
 
-Reference playback now awaits the shared Web Audio unlock path before starting its source. If Safari rejects playback, the app asks the user to tap again; the Service Worker cache version is advanced so installed PWAs receive the update.
+Reference playback now awaits the shared Web Audio unlock path before starting its source. Interrupted touch edits roll back to their starting state. The Service Worker cache version advances so installed PWAs receive both changes.
 
 Development source is modularized without changing the confirmed UI or DSP behavior.
 
