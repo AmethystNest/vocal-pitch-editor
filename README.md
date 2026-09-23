@@ -2,7 +2,7 @@
 
 ## v43 VoiceOver note-navigation focus
 
-The previous/next note controls remain keyboard-focusable at the first and last notes while exposing the unavailable direction with `aria-disabled`. This prevents iOS VoiceOver focus from disappearing when a boundary note is selected. Closing the pitch inspector now clears its visible and accessibility state consistently. Mobile E2E covers one-note boundaries, forward/backward navigation through three notes, compact-screen separation, and inspector dismissal. The Service Worker cache is v43.
+The previous/next note controls remain keyboard-focusable at the first and last notes while exposing the unavailable direction with `aria-disabled`. This prevents iOS VoiceOver focus from disappearing when a boundary note is selected. Closing the pitch inspector now clears its visible and accessibility state consistently. Mobile E2E covers one-note boundaries, forward/backward navigation through three notes, compact-screen separation, and inspector dismissal. The QA workflow runs this browser suite at 320×568 on every push and pull request. The Service Worker cache is v43.
 
 ## v42 reference correction feedback
 
