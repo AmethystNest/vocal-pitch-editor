@@ -100,6 +100,13 @@
   #rollWrap { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--bg); margin-bottom: env(safe-area-inset-bottom, 0px); }
   #rollCanvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
   .srOnly { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  #accessibleNoteNav:focus-within {
+    position:fixed; left:12px; bottom:max(12px, env(safe-area-inset-bottom)); z-index:1001;
+    display:flex; gap:8px; width:auto; height:auto; margin:0; padding:8px;
+    overflow:visible; clip:auto; white-space:normal; border:1px solid #68738a;
+    border-radius:12px; background:#20242e; box-shadow:0 8px 24px rgba(0,0,0,.42);
+  }
+  #accessibleNoteNav button { min-height:44px; padding:8px 12px; color:#fff; background:#303747; border:1px solid #505b70; border-radius:8px; }
 
   /* floating inspector */
   #inspector {
@@ -309,6 +316,10 @@
       <canvas id="rollCanvas" role="region" tabindex="0" aria-describedby="a11yStatus" aria-label="ピッチ編集ロール。左右矢印キーでノート選択、上下矢印キーで選択中ノートを半音変更。タップやドラッグでも編集できます。">
         ピッチ編集ロール。左右矢印キーでノート選択、上下矢印キーで選択中ノートを半音変更します。
       </canvas>
+      <div id="accessibleNoteNav" class="srOnly" role="group" aria-label="ノート選択" hidden>
+        <button id="a11yPreviousNote" type="button" aria-label="前のノートを選択" aria-controls="rollCanvas inspector">前のノート</button>
+        <button id="a11yNextNote" type="button" aria-label="次のノートを選択" aria-controls="rollCanvas inspector">次のノート</button>
+      </div>
       <div id="a11yStatus" class="srOnly" role="status" aria-live="polite" aria-atomic="true"></div>
       <div id="inspector">
         <div class="head"><span class="noteName" id="inspNote">C4</span><button class="closeX" id="inspClose" type="button" aria-label="選択ノートの詳細を閉じる">×</button></div>

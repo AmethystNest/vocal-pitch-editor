@@ -250,6 +250,9 @@ def main():
             assert page.locator('#rollCanvas').get_attribute('tabindex')=='0', 'pitch canvas is not keyboard focusable'
             assert page.locator('#rollCanvas').get_attribute('aria-describedby')=='a11yStatus', 'pitch canvas is not linked to live pitch details'
             assert page.locator('#inspClose').get_attribute('aria-label')=='選択ノートの詳細を閉じる', 'inspector close button has no descriptive accessible name'
+            assert page.locator('#accessibleNoteNav').get_attribute('hidden') is not None, 'note navigation is exposed before analysis'
+            assert page.locator('#a11yPreviousNote').get_attribute('aria-label')=='前のノートを選択'
+            assert page.locator('#a11yNextNote').get_attribute('aria-label')=='次のノートを選択'
             page.locator('#modeLineBtn').tap()
             assert page.locator('#modeLineBtn').get_attribute('aria-pressed')=='true', 'line tool state was not exposed'
             page.locator('#modeNoteBtn').tap()
@@ -339,6 +342,13 @@ def main():
         if browser_name in mobile_modes:
             # Select the fixture's centered A3 note through the real canvas
             # pointer path, make a small correction, and restore it with Undo.
+            assert page.locator('#accessibleNoteNav').get_attribute('hidden') is None, 'analyzed notes are missing VoiceOver navigation'
+            page.locator('#a11yNextNote').focus()
+            nav_box=page.locator('#accessibleNoteNav').bounding_box()
+            assert nav_box and nav_box['width']>=120 and nav_box['height']>=60 and nav_box['x']>=0, f'keyboard-focused assistive controls are not visibly reachable: {nav_box}'
+            page.locator('#a11yNextNote').dispatch_event('click')
+            page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
+            assert page.locator('#a11yStatus').text_content().startswith('選択中 '), 'VoiceOver next-note control did not announce the selected pitch'
             canvas=page.locator('#rollCanvas')
             canvas.focus()
             canvas.press('ArrowRight')

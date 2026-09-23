@@ -125,6 +125,8 @@
   const strengthPresets = $('strengthPresets'), autoCorrectBtn = $('autoCorrectBtn'), autoCorrectLabel = $('autoCorrectLabel');
   const toast = $('toast');
   const a11yStatus = $('a11yStatus');
+  const accessibleNoteNav = $('accessibleNoteNav');
+  const a11yPreviousNote = $('a11yPreviousNote'), a11yNextNote = $('a11yNextNote');
   const guideMode = $('guideMode');
   const guideText = $('guideText');
 
@@ -417,6 +419,7 @@
     S.segments = null;
     S.undoStack = [];
     updateUndoBtn();
+    updateAccessibleNoteNav();
     S.editedChannels = null;
     S.editedBuffer = null;
     S.referenceBuffer = null;
@@ -565,6 +568,7 @@
       console.info(`[PitchEditor] F0+note analysis ${(performance.now() - analyzeT0).toFixed(0)} ms`);
       S.pitchTrack = analyzed.pitchTrack;
       S.segments = analyzed.segments;
+      updateAccessibleNoteNav();
       // The raw mono analysis copy is not used after F0/note extraction.
       // Releasing it matters on iOS, especially before edited/original buffers coexist.
       S.monoSignal = null;
@@ -1473,12 +1477,7 @@
     const ordered = S.segments.slice().sort((a, b) => a.startTime - b.startTime);
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault();
-      const current = ordered.findIndex(seg => seg.id === S.selectedSegId);
-      const direction = e.key === 'ArrowRight' ? 1 : -1;
-      const next = current < 0 ? (direction > 0 ? 0 : ordered.length - 1) :
-        Math.max(0, Math.min(ordered.length - 1, current + direction));
-      showInspectorForSegment(ordered[next].id);
-      render();
+      selectNoteByDirection(e.key === 'ArrowRight' ? 1 : -1);
       return;
     }
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
@@ -1589,6 +1588,7 @@
       } else {
         pushUndoSnapshot(S.dragging.undoSnapshot);
         S.selectedSegId = seg.id;
+        updateAccessibleNoteNav();
         hideInspector();
         S.previewSegId = seg.id;
         scheduleResynth(seg.id);
@@ -2041,6 +2041,30 @@
     if (a11yStatus) a11yStatus.textContent = '';
   }
 
+  function updateAccessibleNoteNav() {
+    if (!accessibleNoteNav || !a11yPreviousNote || !a11yNextNote) return;
+    const segments = S.segments;
+    accessibleNoteNav.hidden = !segments || segments.length === 0;
+    if (!segments || !segments.length) return;
+    const ordered = segments.slice().sort((a, b) => a.startTime - b.startTime);
+    const current = ordered.findIndex(seg => seg.id === S.selectedSegId);
+    a11yPreviousNote.disabled = current === 0;
+    a11yNextNote.disabled = current === ordered.length - 1;
+  }
+
+  function selectNoteByDirection(direction) {
+    if (!S.segments || !S.segments.length) return;
+    const ordered = S.segments.slice().sort((a, b) => a.startTime - b.startTime);
+    const current = ordered.findIndex(seg => seg.id === S.selectedSegId);
+    const next = current < 0 ? (direction > 0 ? 0 : ordered.length - 1) :
+      Math.max(0, Math.min(ordered.length - 1, current + direction));
+    showInspectorForSegment(ordered[next].id);
+    render();
+  }
+
+  a11yPreviousNote.addEventListener('click', () => selectNoteByDirection(-1));
+  a11yNextNote.addEventListener('click', () => selectNoteByDirection(1));
+
   function showInspectorForSegment(id) {
     const seg = S.segments && S.segments.find ? S.segments.find(s => s.id === id) : null;
     if (!seg || !inspector) return;
@@ -2068,9 +2092,9 @@
     }
   }
   function updateInspector() {
-    if (S.selectedSegId == null) { inspector.style.display = 'none'; return; }
+    if (S.selectedSegId == null) { inspector.style.display = 'none'; updateAccessibleNoteNav(); return; }
     const seg = S.segments.find(s => s.id === S.selectedSegId);
-    if (!seg) { inspector.style.display = 'none'; return; }
+    if (!seg) { inspector.style.display = 'none'; updateAccessibleNoteNav(); return; }
     inspector.style.display = 'block';
     const shift = currentShift(seg);
     const lineMedian = medianLineOffset(seg);
@@ -2087,6 +2111,7 @@
     if (a11yStatus) {
       a11yStatus.textContent = `選択中 ${PE.midiToNoteName(targetMidi)}。補正前 ${pitchStatLabel(beforeMidi)}、補正後 ${pitchStatLabel(afterMidi)}、目標 ${PE.midiToNoteName(targetMidi)}。左右矢印でノート選択、上下矢印で半音変更できます。`;
     }
+    updateAccessibleNoteNav();
     const hasRef = suggestionDiffersEnough(seg);
     inspRef.disabled = !hasRef;
     inspRef.textContent = hasRef ? `お手本候補 ${PE.midiToNoteName(Math.round(seg.refSuggestMidi))}` : 'お手本候補なし';
