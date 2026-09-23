@@ -723,11 +723,16 @@
       S.refAlignXs = res.alignXs; S.refAlignYs = res.alignYs;
       S.refAlignRefXs = res.alignRefXs; S.refAlignRefYs = res.alignRefYs;
       S.refPitchTrack = res.refPitchTrack;
-      $('applyAllBtn').disabled = false;
       $('refPlayBtn').disabled = false;
       render();
       const n = res.suggestions.filter((s) => s != null).length;
-      toastMsg(n > 0 ? `リファレンス解析完了(候補${n}件)` : 'リファレンスを解析しましたが、対応する候補が見つかりませんでした', 3000);
+      const actionable = S.segments.filter(suggestionDiffersEnough).length;
+      $('applyAllBtn').disabled = actionable === 0;
+      toastMsg(actionable > 0
+        ? `リファレンス解析完了(補正候補${actionable}件)`
+        : n > 0
+          ? '手本と現在の音程が一致しており、適用できる補正はありません'
+          : 'リファレンスを解析しましたが、対応する候補が見つかりませんでした', 3000);
     } catch (err) {
       if (audioSessionId !== S.audioSessionId) return;
       console.error(err);

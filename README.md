@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v42 reference correction feedback
+
+Bulk correction is disabled when the reference has no matching notes or when every detected note already matches the current pitch. The analysis message reports the number of actionable corrections or explains why none can be applied. Mobile browser E2E checks the identical-reference no-op case. The Service Worker cache is v42.
+
 ## v41 mobile assistive-controls layout
 
 When keyboard or VoiceOver note-navigation controls receive focus, the mobile note inspector reserves space for the fixed navigation bar so pitch controls remain reachable. The Service Worker cache is v41.

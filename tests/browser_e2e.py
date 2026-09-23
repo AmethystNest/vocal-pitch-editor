@@ -384,6 +384,9 @@ def main():
             page.locator('#refFileInput').set_input_files(str(reference_file))
             page.wait_for_function("document.querySelector('#refPlayBtn').disabled === false",timeout=30000)
             assert not errors, f'JS errors after reference analysis: {errors}'
+            if browser_name not in ('mobile-mp3','mobile-m4a','mobile-aac'):
+                assert page.locator('#applyAllBtn').is_disabled(), 'matching vocal/reference pitch offered a no-op bulk correction'
+                assert '一致' in page.locator('#toast').text_content(), 'matching reference did not explain why bulk correction is unavailable'
             page.locator('#refPlayBtn').tap()
             page.wait_for_function("document.querySelector('#refPlayBtn').textContent.includes('⏸')",timeout=5000)
             page.locator('#refPlayBtn').tap()
