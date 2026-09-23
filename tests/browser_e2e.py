@@ -116,6 +116,7 @@ def main():
             page.reload(wait_until='load',timeout=15000)
             page.wait_for_selector('#fileInput',state='attached',timeout=5000)
             assert page.locator('#emptyUpload').is_visible(), 'cached app shell did not render offline'
+        did_pitch_edit=False
         if browser_name in mobile_modes:
             metrics=page.evaluate("""() => ({
                 width: innerWidth,
@@ -157,8 +158,37 @@ def main():
             page.wait_for_function("document.querySelector('#undoBtn').disabled === false",timeout=5000)
             corrected_offset=page.locator('#inspOffset').inner_text()
             assert corrected_offset!=initial_offset, f'touch pitch edit had no effect: {initial_offset}'
+            did_pitch_edit=True
+            # Render the edited pitch and prove that it reaches exported PCM.
+            with page.expect_download(timeout=45000) as edited_info:
+                page.locator('#exportBtn').tap()
+            edited_target=Path(temp)/'edited.wav'
+            edited_info.value.save_as(edited_target)
+            with wave.open(str(edited_target),'rb') as edited_wav:
+                edited_rate=edited_wav.getframerate()
+                edited_raw=edited_wav.readframes(edited_wav.getnframes())
+            edited_pcm=[int.from_bytes(edited_raw[i:i+3],'little',signed=True) for i in range(0,len(edited_raw),3)]
+            lo=int(edited_rate*0.25);hi=min(len(edited_pcm)-1,int(edited_rate*1.1))
+            crossings=sum(1 for i in range(lo,hi) if edited_pcm[i]<=0<edited_pcm[i+1])
+            edited_hz=crossings*edited_rate/(hi-lo)
+            assert edited_hz>235, f'touch pitch edit did not reach exported PCM: {edited_hz:.1f} Hz'
             page.locator('#undoBtn').tap()
             page.wait_for_function("document.querySelector('#undoBtn').disabled === true",timeout=5000)
+
+        # Measure the post-Undo output too; it must return near the 220 Hz source.
+        if did_pitch_edit:
+            with page.expect_download(timeout=45000) as restored_info:
+                page.locator('#exportBtn').tap()
+            restored_target=Path(temp)/'restored.wav'
+            restored_info.value.save_as(restored_target)
+            with wave.open(str(restored_target),'rb') as restored_wav:
+                restored_rate=restored_wav.getframerate()
+                restored_raw=restored_wav.readframes(restored_wav.getnframes())
+            restored_pcm=[int.from_bytes(restored_raw[i:i+3],'little',signed=True) for i in range(0,len(restored_raw),3)]
+            lo=int(restored_rate*0.25);hi=min(len(restored_pcm)-1,int(restored_rate*1.1))
+            crossings=sum(1 for i in range(lo,hi) if restored_pcm[i]<=0<restored_pcm[i+1])
+            restored_hz=crossings*restored_rate/(hi-lo)
+            assert abs(restored_hz-220)<3, f'Undo export did not restore source pitch: {restored_hz:.1f} Hz'
             assert page.locator('#inspOffset').inner_text()==initial_offset, 'touch Undo did not restore pitch'
 
             # Split the same note through the toolbar and canvas hit target,
