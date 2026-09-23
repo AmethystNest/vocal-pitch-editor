@@ -398,6 +398,12 @@ def main():
             page.keyboard.press('Enter')
             page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
             assert page.locator('#a11yStatus').text_content().startswith('ノート 1 / '), 'VoiceOver next-note control did not announce the selected note position'
+            assistive_layout=page.evaluate("""() => {
+                const nav=document.querySelector('#accessibleNoteNav').getBoundingClientRect();
+                const panel=document.querySelector('#inspector').getBoundingClientRect();
+                return {navTop:nav.top,panelBottom:panel.bottom,separated:nav.top>=panel.bottom};
+            }""")
+            assert assistive_layout['separated'], f'focused VoiceOver navigation obscured the mobile pitch inspector: {assistive_layout}'
             canvas=page.locator('#rollCanvas')
             canvas.focus()
             canvas.press('ArrowRight')
