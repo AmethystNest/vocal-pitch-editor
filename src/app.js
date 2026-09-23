@@ -148,7 +148,7 @@
     audioCtx: null,
     sr: 44100,
     numCh: 1,
-    origChannels: null,   // Float32Array[] original decoded audio (Web Audio native precision)
+    origChannels: null,   // iPhone: AudioBuffer channel views; other browsers: immutable PCM copies
     monoSignal: null,     // Float64Array mono mix for analysis
     pitchTrack: null,
     segments: null,
@@ -470,10 +470,13 @@
       S.monoSignal = analysis.signal;
       monoFull = releaseAnalysisSource(monoFull, analysis);
 
-      // Keep original-rate audio for actual listening/rendering.
+      // Keep original-rate audio for actual listening/rendering. The iPhone
+      // channel views retain decoded PCM without allocating another song-sized
+      // array; they remain read-only and edits go to a separate lazy copy.
       S.origChannels = [];
       for (let c = 0; c < S.numCh; c++) {
-        S.origChannels.push(Float32Array.from(decoded.getChannelData(c)));
+        const channel = decoded.getChannelData(c);
+        S.origChannels.push(IS_IOS ? channel : Float32Array.from(channel));
       }
 
       loadingStatus.textContent = analysis.downsampled
@@ -495,15 +498,12 @@
         toastMsg('ピッチを検出できませんでした。別の音源をお試しください。', 3000);
       }
       fitVerticalRange();
-      // MUST be independent copies, not the same arrays as S.origChannels:
-      // doPartialResynth mutates S.editedChannels[c] in place via .set(), and
-      // aliased arrays would silently corrupt the "original" audio the very
-      // first time any edit ran (every future resynth, including resets,
-      // would then rebuild from already-edited source instead of the truth).
-      S.editedChannels = S.origChannels.map((c) => Float32Array.from(c));
-      // Keep the playback AudioBuffer lazy. Creating it here duplicates the
-      // whole edited song again at the exact point where iPhone import memory
-      // is still near its peak. Playback/preview already rebuild it on demand.
+      // Until the first edit, the original channel arrays are also the exact
+      // edited signal. Avoid a second full-song PCM copy during iPhone import.
+      // The mutable edited copy is created lazily before the first resynthesis.
+      S.editedChannels = null;
+      // Keep playback AudioBuffer lazy as well; playback/export materialize
+      // their working representation only when the user requests it.
       S.editedBuffer = null;
 
       $('fileNameLabel').textContent = file.name + (S.analysisDownsampled ? '・iPhone省メモリ解析' : '');
@@ -2023,6 +2023,9 @@
       } else {
         const ids = Array.from(S.pendingResynthSet);
         S.pendingResynthSet.clear();
+        // A local splice needs a mutable baseline. Create the iPhone's
+        // full-song edited PCM only when the first real edit is rendered.
+        if (!S.editedChannels) S.editedChannels = S.origChannels.map((ch) => Float32Array.from(ch));
         for (const id of ids) {
           if (audioSessionId !== S.audioSessionId) break;
           await doPartialResynth(id, audioSessionId);
@@ -2178,11 +2181,13 @@
   }
 
   async function rebuildEditedBuffer() {
-    const len = S.editedChannels[0].length;
+    const channels = S.editedChannels || S.origChannels;
+    if (!channels || !channels.length) return;
+    const len = channels[0].length;
     const buf = S.audioCtx.createBuffer(S.numCh, len, S.sr);
     for (let c = 0; c < S.numCh; c++) {
       const dst = buf.getChannelData(c);
-      const src = S.editedChannels[Math.min(c, S.editedChannels.length - 1)];
+      const src = channels[Math.min(c, channels.length - 1)];
       dst.set(src.length === len ? src : src.subarray(0, len));
     }
     S.editedBuffer = buf;
@@ -2198,7 +2203,7 @@
   // whole track. Interrupts any previous solo preview so rapid edits don't
   // pile up overlapping audio.
   async function playSegmentSolo(seg) {
-    if (!seg || !S.editedChannels) return;
+    if (!seg || !S.origChannels) return;
     if (!S.editedBuffer) await rebuildEditedBuffer();
     if (S.soloSource) { try { S.soloSource.onended = null; S.soloSource.stop(); } catch (e) {} S.soloSource = null; }
     await unlockAudio();
@@ -2224,7 +2229,7 @@
   }
 
   async function startPlayback(skipFlush = false) {
-    if (!S.editedChannels) return;
+    if (!S.origChannels) return;
     stopReference();
     await unlockAudio();
 
@@ -2297,7 +2302,8 @@
     try {
       await flushResynth();
       const exportT0 = performance.now();
-      const blob = await PE.encodeWavChunked(S.editedChannels, S.sr, { framesPerChunk: IS_IOS ? 16384 : 32768 });
+      const exportChannels = S.editedChannels || S.origChannels;
+      const blob = await PE.encodeWavChunked(exportChannels, S.sr, { framesPerChunk: IS_IOS ? 16384 : 32768 });
       console.info(`[PitchEditor] WAV encode ${(performance.now() - exportT0).toFixed(0)} ms, ${(blob.size / 1048576).toFixed(1)} MB`);
       const outName = S.fileBaseName + '_edited.wav';
       const outFile = new File([blob], outName, { type: 'audio/wav' });
