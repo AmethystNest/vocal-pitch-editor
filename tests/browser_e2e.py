@@ -98,6 +98,22 @@ def main():
         assert 'tone.wav' in page.locator('#fileNameLabel').inner_text()
         assert not errors, f'JS errors: {errors}'
         assert not console_errors, f'Console errors: {console_errors}'
+        if browser_name=='mobile':
+            # Select the fixture's centered A3 note through the real canvas
+            # pointer path, make a small correction, and restore it with Undo.
+            canvas=page.locator('#rollCanvas')
+            canvas_box=canvas.bounding_box()
+            assert canvas_box and canvas_box['width']>0 and canvas_box['height']>0
+            canvas.tap(position={'x':canvas_box['width']/2,'y':canvas_box['height']/2})
+            page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
+            initial_offset=page.locator('#inspOffset').inner_text()
+            page.locator('#inspector [data-d=\"10\"]').tap()
+            page.wait_for_function("document.querySelector('#undoBtn').disabled === false",timeout=5000)
+            corrected_offset=page.locator('#inspOffset').inner_text()
+            assert corrected_offset!=initial_offset, f'touch pitch edit had no effect: {initial_offset}'
+            page.locator('#undoBtn').tap()
+            page.wait_for_function("document.querySelector('#undoBtn').disabled === true",timeout=5000)
+            assert page.locator('#inspOffset').inner_text()==initial_offset, 'touch Undo did not restore pitch'
         # Import intentionally leaves the full-song AudioBuffer unmaterialized
         # to reduce iPhone peak memory. Exercise Play so the lazy playback path
         # is covered by the browser test rather than only by static inspection.
