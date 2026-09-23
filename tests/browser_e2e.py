@@ -2,6 +2,7 @@
 Set BROWSER=webkit for Safari-engine coverage, BROWSER=mobile for an iPhone-sized
 touch run, BROWSER=mobile-se for a compact iPhone viewport, BROWSER=mobile-long
 to exercise long-file memory handling, or BROWSER=pwa-offline to verify offline use.
+BROWSER=mobile-share-fallback and BROWSER=mobile-share-cancel simulate iOS share-sheet outcomes.
 Chromium simulations do not replace iPhone hardware testing.
 """
 from pathlib import Path
@@ -65,7 +66,8 @@ def tone(path,rate=24000,seconds=1.4,hz=220):
 def main():
     browser_name=os.environ.get('BROWSER','chromium').lower()
     with TemporaryDirectory() as temp,serve(https=browser_name=='pwa-offline') as url,sync_playwright() as pw:
-        mobile_modes=('mobile','mobile-se','mobile-long','mobile-cycle')
+        mobile_modes=('mobile','mobile-se','mobile-long','mobile-cycle','mobile-share-fallback','mobile-share-cancel')
+        mobile_share_modes=('mobile-share-fallback','mobile-share-cancel')
         expected_seconds=75.2 if browser_name=='mobile-long' else 1.4
         wav=Path(temp)/'tone.wav';tone(wav,seconds=expected_seconds)
         if browser_name=='webkit':
@@ -122,6 +124,19 @@ def main():
                 Tracked.prototype = Native.prototype;
                 window.AudioContext = Tracked;
             })();""")
+        if browser_name in mobile_share_modes:
+            share_error='NotAllowedError' if browser_name=='mobile-share-fallback' else 'AbortError'
+            page.add_init_script(f"""(() => {{
+                window.__testShareEnabled = false;
+                window.__testShareCalls = 0;
+                window.__testSharedFiles = [];
+                Object.defineProperty(navigator, 'canShare', {{ configurable:true, value:() => window.__testShareEnabled }});
+                Object.defineProperty(navigator, 'share', {{ configurable:true, value:async (data) => {{
+                    window.__testShareCalls++;
+                    window.__testSharedFiles = (data.files || []).map(file => file.name);
+                    throw new DOMException('simulated share result', '{share_error}');
+                }} }});
+            }})();""")
         errors=[]
         console_errors=[]
         page.on('pageerror',lambda e:errors.append(str(e)))
@@ -355,9 +370,28 @@ def main():
         assert not errors, f'JS errors after playback: {errors}'
         assert not console_errors, f'Console errors after playback: {console_errors}'
         # Exercise the actual export UI and validate WAV container/length.
+        if browser_name in mobile_share_modes:
+            page.evaluate("window.__testShareEnabled=true; window.__testShareCalls=0; window.__testSharedFiles=[]")
+        if browser_name=='mobile-share-cancel':
+            unexpected_downloads=[]
+            page.on('download',lambda download: unexpected_downloads.append(download.suggested_filename))
+            page.locator('#exportBtn').tap()
+            page.wait_for_function("document.querySelector('#toast').style.display === 'block' && document.querySelector('#toast').textContent.includes('共有をキャンセルしました')",timeout=45000)
+            page.wait_for_timeout(100)
+            share_state=page.evaluate("() => ({calls:window.__testShareCalls,files:window.__testSharedFiles})")
+            assert share_state['calls']==1 and share_state['files']==['tone_edited.wav'], f'native share cancellation was not handled: {share_state}'
+            assert not page.locator('#exportBtn').is_disabled(), 'export button stayed disabled after cancelling share'
+            assert not unexpected_downloads, f'cancelled share unexpectedly triggered a download: {unexpected_downloads}'
+            assert not errors and not console_errors, f'share cancellation raised browser errors: {errors}; {console_errors}'
+            print(f'browser-e2e: PASS ({browser_name} native share cancellation)')
+            browser.close()
+            return
         with page.expect_download(timeout=45000) as info:
             if browser_name in mobile_modes: page.locator('#exportBtn').tap()
             else: page.locator('#exportBtn').click()
+        if browser_name=='mobile-share-fallback':
+            share_state=page.evaluate("() => ({calls:window.__testShareCalls,files:window.__testSharedFiles})")
+            assert share_state['calls']==1 and share_state['files']==['tone_edited.wav'], f'native share was not attempted: {share_state}'
         download=info.value
         target=Path(temp)/'export.wav';download.save_as(target)
         with wave.open(str(target),'rb') as f:
