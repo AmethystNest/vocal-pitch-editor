@@ -194,12 +194,19 @@ def main():
                 width: innerWidth,
                 height: innerHeight,
                 documentWidth: document.documentElement.scrollWidth,
-                touchPoints: navigator.maxTouchPoints
+                touchPoints: navigator.maxTouchPoints,
+                essentialButtonsVisible: ['backBtn','playBtn','undoBtn','exportBtn'].every(id => {
+                    const r=document.getElementById(id).getBoundingClientRect();
+                    return r.width>0 && r.left>=0 && r.right<=innerWidth;
+                })
             })""")
             expected_viewport=(375,667) if browser_name=='mobile-se' else (390,844)
             assert (metrics['width'],metrics['height'])==expected_viewport, f'mobile viewport mismatch: {metrics}'
             assert metrics['documentWidth']<=metrics['width'], f'horizontal overflow on mobile: {metrics}'
             assert metrics['touchPoints']>0, f'touch input unavailable: {metrics}'
+            assert metrics['essentialButtonsVisible'], f'essential mobile controls are not visible: {metrics}'
+            unnamed_buttons=page.locator('#topbar button:not([aria-label])').evaluate_all("els => els.filter(el => !(el.getAttribute('title') || el.querySelector('.toolLabel')?.textContent?.trim())).map(el => el.id)")
+            assert not unnamed_buttons, f'mobile toolbar has unnamed buttons: {unnamed_buttons}'
         page.locator('#fileInput').set_input_files(str(audio_file))
         try:
             page.wait_for_function("document.querySelector('#exportBtn').disabled === false",timeout=45000)

@@ -270,6 +270,9 @@
       <button class="iconBtn" id="backBtn" title="音声ファイルを開く">📁<span class="toolLabel">音源</span></button>
       <button class="iconBtn" id="fullscreenBtn" title="Androidで全画面表示" hidden>⛶<span class="toolLabel">全画面</span></button>
       <button class="iconBtn accent" id="playBtn" title="再生/一時停止" disabled>▶<span class="toolLabel">再生</span></button>
+      <button class="iconBtn" id="undoBtn" title="1つ前の編集に戻る（最大10回）" disabled>↶<span class="toolLabel">戻る</span></button>
+      <span id="fileNameLabel"></span>
+      <button class="iconBtn wide accent" id="exportBtn" title="24-bit WAVで書き出し" disabled>⬇<span class="toolLabel">書き出し</span></button>
       <button class="iconBtn" id="zoomOutBtn" title="縮小" disabled>−<span class="toolLabel">縮小</span></button>
       <button class="iconBtn" id="zoomInBtn" title="拡大" disabled>＋<span class="toolLabel">拡大</span></button>
       <button class="iconBtn" id="fitAllBtn" title="検出した譜面全体を表示" disabled>↔<span class="toolLabel">全体</span></button>
@@ -279,15 +282,12 @@
       </div>
       <button class="iconBtn" id="splitBtn" title="分割:タップした位置でノートを2つに分ける" disabled>✂️<span class="toolLabel">分割</span></button>
       <button class="iconBtn" id="autoPreviewBtn" title="編集のたびに自動で試聴(タップでオン/オフ)">🔈<span class="toolLabel">自動試聴</span></button>
-      <button class="iconBtn" id="undoBtn" title="1つ前の編集に戻る（最大10回）" disabled>↶<span class="toolLabel">戻る</span></button>
       <button class="iconBtn" id="resetAllBtn" title="全て元に戻す" disabled>↺<span class="toolLabel">リセット</span></button>
       <button class="iconBtn" id="autoCorrectBtn" title="検出した全ノートを現在の補正強度で最寄りの音程へ寄せる" disabled>✨<span class="toolLabel" id="autoCorrectLabel">自動補正 60%</span></button>
       <button class="iconBtn" id="refBtn" title="リファレンス(お手本)音源を読み込む" disabled>🎯<span class="toolLabel">お手本</span></button>
       <button class="iconBtn" id="refPlayBtn" title="リファレンスを再生(現在の再生位置に対応する箇所から)" disabled>🎯▶<span class="toolLabel">お手本再生</span></button>
       <button class="iconBtn wide" id="applyAllBtn" title="すべての候補を適用" disabled>✓<span class="toolLabel">候補適用</span></button>
       <div class="spacer"></div>
-      <span id="fileNameLabel"></span>
-      <button class="iconBtn wide accent" id="exportBtn" title="24-bit WAVで書き出し" disabled>⬇<span class="toolLabel">書き出し</span></button>
     </div>
     <div id="interactionGuide">
       <span class="guideMode" id="guideMode">ノート</span>

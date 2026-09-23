@@ -1,8 +1,10 @@
-# Vocal Pitch Editor v23
+# Vocal Pitch Editor
 
-## v24 iOS interaction and reference playback
+## v25 mobile toolbar
 
-Reference playback now awaits the shared Web Audio unlock path before starting its source. Interrupted touch edits roll back to their starting state. The Service Worker cache version advances so installed PWAs receive both changes.
+Open, playback, Undo and WAV export are grouped at the start of the toolbar for phone users. This keeps recovery and delivery actions within reach without scrolling through editing tools. The Service Worker cache is v25.
+
+Previous mobile reliability improvements include interrupted-touch rollback and Web Audio unlock before reference playback on iPhone.
 
 Development source is modularized without changing the confirmed UI or DSP behavior.
 
@@ -12,6 +14,10 @@ Development source is modularized without changing the confirmed UI or DSP behav
 - `index.html`: markup/styles and module entry loading
 
 Run `npm run check` for syntax checks. Serve over HTTP(S) for Worker/PWA testing.
+
+## Device verification
+
+Automated mobile tests emulate iPhone viewport dimensions and touch in Chromium; they do not prove real iOS Safari behavior. Before calling an iPhone release verified, test Safari and the Add to Home Screen app on a physical device: import WAV and M4A from Files, analyze and edit a note, undo, play vocal/reference, background and resume the app during playback, rotate while dragging, export through Share and Save to Files, then relaunch offline. Record the iPhone model, iOS version, source format/duration and result for each path.
 
 ## QA
 `npm run qa` validates JS syntax plus deterministic F0/noise/dry-path regression tests.
