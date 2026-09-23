@@ -21,7 +21,7 @@ Run `npm run check` for syntax checks. Serve over HTTP(S) for Worker/PWA testing
 
 Windows + Playwright Chromiumで `npm run test:browser` 相当のE2Eを実行し、アップロード → Worker解析 → 24-bit WAV書き出しまでPASSを確認済み。Web Audioは入力ファイルのサンプルレートではなくAudioContextのネイティブレートへデコードするため、E2Eは出力レートそのものではなく、対応範囲・チャンネル数・24-bit深度・時間長を検証する。実ボーカルの聴感、編集ジェスチャ、iPhone Safari実機は別途最終確認が必要。
 
-`BROWSER=mobile` を指定すると、390×844・DPR 3・タッチ有効・iPhone User-AgentのChromiumで、横はみ出し、音源読込、再生タップ、WAV書き出しとiOS専用コード経路を検証できる。Windows PowerShellでは `$env:BROWSER='mobile'; python tests/browser_e2e.py` を実行する。これはiPhone実機Safariの代替ではない。
+`BROWSER=mobile` を指定すると、390×844・DPR 3・タッチ有効・iPhone User-AgentのChromiumで、横はみ出し、音源読込、ノート選択、±10¢補正とUndo、ノート分割とUndo、二本指ピンチ、再生、WAV書き出しを検証できる。`BROWSER=mobile-long` は75.2秒音源でiPhone向けダウンサンプル解析を含めて検証する。Windows PowerShellでは `$env:BROWSER='mobile'; python tests/browser_e2e.py` または `$env:BROWSER='mobile-long'; python tests/browser_e2e.py` を実行する。これはiPhone実機Safariの代替ではない。
 
 ## v22 iPhone/PWA reliability
 

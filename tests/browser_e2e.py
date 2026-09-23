@@ -1,7 +1,7 @@
 """Real browser smoke test: file upload -> analysis -> WAV export.
-Set BROWSER=webkit for Safari-engine coverage or BROWSER=mobile for an iPhone-sized,
-touch-enabled Chromium run through the iOS-specific application path. Neither
-browser mode replaces iPhone hardware testing.
+Set BROWSER=webkit for Safari-engine coverage, BROWSER=mobile for an iPhone-sized
+touch run, or BROWSER=mobile-long to exercise long-file iPhone memory handling.
+Chromium simulations do not replace iPhone hardware testing.
 """
 from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -30,8 +30,9 @@ def tone(path,rate=24000,seconds=1.4):
 
 def main():
     with TemporaryDirectory() as temp,serve() as url,sync_playwright() as pw:
-        wav=Path(temp)/'tone.wav';tone(wav)
         browser_name=os.environ.get('BROWSER','chromium').lower()
+        expected_seconds=75.2 if browser_name=='mobile-long' else 1.4
+        wav=Path(temp)/'tone.wav';tone(wav,seconds=expected_seconds)
         if browser_name=='webkit':
             browser=pw.webkit.launch(headless=True)
         else:
@@ -50,7 +51,7 @@ def main():
                 'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 '
                 'Mobile/15E148 Safari/604.1'
             )
-        elif browser_name=='mobile':
+        elif browser_name in ('mobile','mobile-long'):
             # Chromium supplies working Web Audio on this host while the iPhone
             # user agent exercises the app's iOS memory-first code paths.
             context_args.update(
@@ -71,7 +72,7 @@ def main():
         page.on('pageerror',lambda e:errors.append(str(e)))
         page.on('console',lambda m: console_errors.append(m.text) if m.type=='error' else None)
         page.goto(url,wait_until='load',timeout=30000)
-        if browser_name=='mobile':
+        if browser_name in ('mobile','mobile-long'):
             metrics=page.evaluate("""() => ({
                 width: innerWidth,
                 height: innerHeight,
@@ -98,7 +99,7 @@ def main():
         assert 'tone.wav' in page.locator('#fileNameLabel').inner_text()
         assert not errors, f'JS errors: {errors}'
         assert not console_errors, f'Console errors: {console_errors}'
-        if browser_name=='mobile':
+        if browser_name in ('mobile','mobile-long'):
             # Select the fixture's centered A3 note through the real canvas
             # pointer path, make a small correction, and restore it with Undo.
             canvas=page.locator('#rollCanvas')
@@ -114,20 +115,54 @@ def main():
             page.locator('#undoBtn').tap()
             page.wait_for_function("document.querySelector('#undoBtn').disabled === true",timeout=5000)
             assert page.locator('#inspOffset').inner_text()==initial_offset, 'touch Undo did not restore pitch'
+
+            # Split the same note through the toolbar and canvas hit target,
+            # then undo so playback/export still cover a continuous note.
+            page.locator('#splitBtn').scroll_into_view_if_needed()
+            page.locator('#splitBtn').tap()
+            page.wait_for_function("document.querySelector('#splitBtn').classList.contains('armed')",timeout=3000)
+            canvas_box=canvas.bounding_box()
+            canvas.tap(position={'x':canvas_box['width']*0.4,'y':canvas_box['height']/2})
+            page.wait_for_function("document.querySelector('#toast').style.display === 'block'",timeout=3000)
+            split_message=page.locator('#toast').text_content()
+            assert 'ノートを分割しました' in split_message, f'touch split failed: {split_message.encode("unicode_escape")}'
+            page.wait_for_function("document.querySelector('#undoBtn').disabled === false",timeout=5000)
+            page.locator('#undoBtn').tap()
+            page.wait_for_function("document.querySelector('#undoBtn').disabled === true",timeout=5000)
+
+            if browser_name=='mobile':
+                # Two actual touch points exercise the pinch-to-zoom handler;
+                # the canvas image must be redrawn at the new time scale.
+                cdp=context.new_cdp_session(page)
+                pinch_x=canvas_box['x']+canvas_box['width']/2
+                pinch_y=canvas_box['y']+canvas_box['height']*0.72
+                signature="""() => {
+                    const c=document.querySelector('#rollCanvas'),x=c.getContext('2d').getImageData(0,0,c.width,c.height).data;
+                    let h=2166136261; for(let i=0;i<x.length;i+=37){h^=x[i];h=Math.imul(h,16777619)} return h>>>0;
+                }"""
+                before_zoom=page.evaluate(signature)
+                cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':[{'x':pinch_x-22,'y':pinch_y,'id':1},{'x':pinch_x+22,'y':pinch_y,'id':2}]})
+                cdp.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[{'x':pinch_x-55,'y':pinch_y,'id':1},{'x':pinch_x+55,'y':pinch_y,'id':2}]})
+                cdp.send('Input.dispatchTouchEvent',{'type':'touchEnd','touchPoints':[]})
+                page.wait_for_timeout(100)
+                after_zoom=page.evaluate(signature)
+                assert after_zoom!=before_zoom, 'two-finger pinch did not redraw the pitch canvas'
+        if browser_name=='mobile-long':
+            assert 'iPhone省メモリ解析' in page.locator('#fileNameLabel').text_content(), 'long iPhone analysis did not select downsampled memory mode'
         # Import intentionally leaves the full-song AudioBuffer unmaterialized
         # to reduce iPhone peak memory. Exercise Play so the lazy playback path
         # is covered by the browser test rather than only by static inspection.
-        if browser_name=='mobile': page.locator('#playBtn').tap()
+        if browser_name in ('mobile','mobile-long'): page.locator('#playBtn').tap()
         else: page.locator('#playBtn').click()
         page.wait_for_function("document.querySelector('#playBtn').textContent.includes('停止')",timeout=10000)
-        if browser_name=='mobile': page.locator('#playBtn').tap()
+        if browser_name in ('mobile','mobile-long'): page.locator('#playBtn').tap()
         else: page.locator('#playBtn').click()
         page.wait_for_function("document.querySelector('#playBtn').textContent.includes('再生')",timeout=10000)
         assert not errors, f'JS errors after playback: {errors}'
         assert not console_errors, f'Console errors after playback: {console_errors}'
         # Exercise the actual export UI and validate WAV container/length.
         with page.expect_download(timeout=45000) as info:
-            if browser_name=='mobile': page.locator('#exportBtn').tap()
+            if browser_name in ('mobile','mobile-long'): page.locator('#exportBtn').tap()
             else: page.locator('#exportBtn').click()
         download=info.value
         target=Path(temp)/'export.wav';download.save_as(target)
@@ -139,7 +174,7 @@ def main():
             # 24 kHz fixture commonly becomes 48 kHz in Chromium.
             out_rate=f.getframerate()
             assert 22050 <= out_rate <= 192000
-            assert abs((f.getnframes()/out_rate)-1.4) < (2/out_rate)
+            assert abs((f.getnframes()/out_rate)-expected_seconds) < (2/out_rate)
         assert not errors, f'JS errors after export: {errors}'
         assert not console_errors, f'Console errors after export: {console_errors}'
         print(f'browser-e2e: PASS ({browser_name} upload -> Worker analysis -> lazy playback -> WAV export)')
