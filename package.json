@@ -1,0 +1,13 @@
+{
+  "name": "vocal-pitch-editor",
+  "private": true,
+  "version": "21.0.0",
+  "scripts": {
+    "check": "node --check src/engine.js && node --check src/app.js && node --check src/worker.js",
+    "serve": "npx serve .",
+    "test:engine": "node tests/engine-smoke.js",
+    "qa": "npm run check && npm run test:engine && npm run test:regression",
+    "test:regression": "node tests/regression.js",
+    "test:browser": "python tests/browser_e2e.py"
+  }
+}
