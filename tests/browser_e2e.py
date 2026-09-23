@@ -242,6 +242,12 @@ def main():
             page.reload(wait_until='load',timeout=15000)
             page.wait_for_selector('#fileInput',state='attached',timeout=5000)
             assert page.locator('#emptyUpload').is_visible(), 'cached app shell did not render offline'
+            offline_pwa=page.evaluate("""async () => {
+                const manifest=await (await fetch('./manifest.webmanifest')).json();
+                const icon=await fetch('./icon-512.png');
+                return {theme:manifest.theme_color,background:manifest.background_color,iconOk:icon.ok};
+            }""")
+            assert offline_pwa['theme']==pwa_state['themeColor']==offline_pwa['background'] and offline_pwa['iconOk'], f'offline PWA assets are stale or incomplete: {offline_pwa}; online={pwa_state}'
         did_pitch_edit=False
         if browser_name in mobile_modes:
             metrics=page.evaluate("""() => ({
