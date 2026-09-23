@@ -416,11 +416,25 @@ def main():
             assert not too_small, f'mobile pitch inspector has undersized touch targets: {too_small}'
             inspector_box=page.locator('#inspector').bounding_box()
             assert inspector_box and inspector_box['y']>=0 and inspector_box['y']+inspector_box['height']<=metrics['height'], f'mobile pitch inspector exceeds viewport: {inspector_box}'
+            portrait_size={'width':metrics['width'],'height':metrics['height']}
+            page.set_viewport_size({'width':portrait_size['height'],'height':portrait_size['width']})
+            page.wait_for_function('(size) => innerWidth === size.width && innerHeight === size.height',arg={'width':portrait_size['height'],'height':portrait_size['width']},timeout=5000)
+            page.wait_for_function("() => { const c=document.querySelector('#rollCanvas'), w=document.querySelector('#rollWrap'), d=Math.min(devicePixelRatio||1,2); return c.width===Math.round(w.clientWidth*d) && c.height===Math.round(w.clientHeight*d); }",timeout=5000)
+            landscape_metrics=page.evaluate("() => ({width:innerWidth,height:innerHeight,documentWidth:document.documentElement.scrollWidth})")
+            assert landscape_metrics['documentWidth']<=landscape_metrics['width'], f'horizontal overflow after mobile rotation: {landscape_metrics}'
+            landscape_inspector=page.locator('#inspector').bounding_box()
+            assert landscape_inspector and landscape_inspector['y']>=0 and landscape_inspector['y']+landscape_inspector['height']<=landscape_metrics['height'], f'inspector escaped the landscape viewport: {landscape_inspector}; {landscape_metrics}'
+            landscape_adjustment=page.locator('#inspector [data-d="10"]')
+            landscape_adjustment.scroll_into_view_if_needed()
+            adjustment_box=landscape_adjustment.bounding_box()
+            assert adjustment_box and adjustment_box['y']>=0 and adjustment_box['y']+adjustment_box['height']<=landscape_metrics['height'], f'pitch adjustment is unreachable in landscape: {adjustment_box}'
             initial_offset=page.locator('#inspOffset').inner_text()
-            page.locator('#inspector [data-d=\"10\"]').tap()
+            landscape_adjustment.tap()
             page.wait_for_function("document.querySelector('#undoBtn').disabled === false",timeout=5000)
             corrected_offset=page.locator('#inspOffset').inner_text()
             assert corrected_offset!=initial_offset, f'touch pitch edit had no effect: {initial_offset}'
+            page.set_viewport_size(portrait_size)
+            page.wait_for_function('(size) => innerWidth === size.width && innerHeight === size.height',arg=portrait_size,timeout=5000)
             did_pitch_edit=True
             # Render the edited pitch and prove that it reaches exported PCM.
             if browser_name in mobile_modes: prepare_mobile_download(page)
