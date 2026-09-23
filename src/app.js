@@ -437,6 +437,9 @@
   // ============================================================
   fileInput.addEventListener('change', async (e) => {
     const file = e.target.files[0];
+    // Retain the File first, then clear the picker so iOS Safari can emit
+    // change again when the user selects the same audio file a second time.
+    e.target.value = '';
     if (!file) return;
     await loadFile(file);
   });

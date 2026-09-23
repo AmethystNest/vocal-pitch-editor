@@ -109,6 +109,19 @@ def main():
             )
         context=browser.new_context(**context_args)
         page=context.new_page()
+        if browser_name in mobile_modes:
+            page.add_init_script("""(() => {
+                const Native = window.AudioContext || window.webkitAudioContext;
+                if (!Native) return;
+                window.__testAudioContexts = [];
+                const Tracked = function(...args) {
+                    const context = new Native(...args);
+                    window.__testAudioContexts.push(context);
+                    return context;
+                };
+                Tracked.prototype = Native.prototype;
+                window.AudioContext = Tracked;
+            })();""")
         errors=[]
         console_errors=[]
         page.on('pageerror',lambda e:errors.append(str(e)))
@@ -166,6 +179,8 @@ def main():
                 f'analysis timeout: state={state}; pageErrors={errors}; consoleErrors={console_errors}'
             )
         assert 'tone.wav' in page.locator('#fileNameLabel').inner_text()
+        if browser_name in mobile_modes:
+            assert page.locator('#fileInput').evaluate('(input) => input.value') == '', 'main file picker value was not cleared after selection'
         assert not errors, f'JS errors: {errors}'
         assert not console_errors, f'Console errors: {console_errors}'
         if browser_name in ('mobile','mobile-se','mobile-cycle'):
@@ -280,6 +295,9 @@ def main():
             assert not errors, f'JS errors after replacing the audio session: {errors}'
             assert not console_errors, f'Console errors after replacing the audio session: {console_errors}'
             final_expected_hz=330
+            page.locator('#fileInput').set_input_files(str(replacement))
+            page.wait_for_function("document.querySelector('#fileNameLabel').textContent.includes('replacement.wav') && document.querySelector('#exportBtn').disabled === false",timeout=45000)
+            assert page.locator('#refPlayBtn').is_disabled(), 'reference audio returned after selecting the same source again'
         # Import intentionally leaves the full-song AudioBuffer unmaterialized
         # to reduce iPhone peak memory. Exercise Play so the lazy playback path
         # is covered by the browser test rather than only by static inspection.
@@ -289,6 +307,34 @@ def main():
         if browser_name in mobile_modes: page.locator('#playBtn').tap()
         else: page.locator('#playBtn').click()
         page.wait_for_function("document.querySelector('#playBtn').textContent.includes('再生')",timeout=10000)
+        if browser_name in ('mobile','mobile-se'):
+            page.set_viewport_size({'width':844,'height':390})
+            page.wait_for_function("document.querySelector('#rollCanvas').clientWidth > 500",timeout=5000)
+            page.wait_for_timeout(250)
+            landscape=page.evaluate("""() => ({
+                cssWidth:document.querySelector('#rollCanvas').clientWidth,
+                canvasWidth:document.querySelector('#rollCanvas').width,
+                dpr:Math.min(devicePixelRatio || 1,2),
+                pageWidth:document.documentElement.scrollWidth,
+                viewportWidth:innerWidth
+            })""")
+            assert abs(landscape['canvasWidth']-landscape['cssWidth']*landscape['dpr']) <= 2, f'canvas backing store stale in landscape: {landscape}'
+            assert landscape['pageWidth'] <= landscape['viewportWidth'], f'horizontal overflow in landscape: {landscape}'
+            page.set_viewport_size({'width':390,'height':844})
+            page.wait_for_function("document.querySelector('#rollCanvas').clientWidth < 500",timeout=5000)
+            page.wait_for_timeout(250)
+        if browser_name in mobile_modes:
+            recovered=page.evaluate("""async () => {
+                const context=window.__testAudioContexts?.at(-1);
+                if (!context) return {available:false};
+                await context.suspend();
+                window.dispatchEvent(new Event('pageshow'));
+                const deadline=Date.now()+3000;
+                while(context.state!=='running' && Date.now()<deadline)
+                    await new Promise(resolve=>setTimeout(resolve,20));
+                return {available:true,state:context.state};
+            }""")
+            assert recovered.get('available') and recovered.get('state')=='running', f'AudioContext did not recover on pageshow: {recovered}'
         assert not errors, f'JS errors after playback: {errors}'
         assert not console_errors, f'Console errors after playback: {console_errors}'
         # Exercise the actual export UI and validate WAV container/length.
