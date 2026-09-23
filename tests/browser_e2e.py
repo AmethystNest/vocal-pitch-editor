@@ -131,6 +131,11 @@ def main():
             page.add_init_script("""(() => {
                 const Native = window.AudioContext || window.webkitAudioContext;
                 if (!Native) return;
+                window.__testDocumentHidden = false;
+                Object.defineProperty(document, 'hidden', {
+                    configurable:true,
+                    get:() => window.__testDocumentHidden
+                });
                 window.__testAudioContexts = [];
                 const Tracked = function(...args) {
                     const context = new Native(...args);
@@ -321,6 +326,32 @@ def main():
                 after_cancel=page.evaluate(signature)
                 assert after_cancel==before_cancel, 'cancelled touch left a partial note or pan edit behind'
                 assert page.evaluate("!!document.querySelector('#rollCanvas').matches(':active')") is False, 'canvas remained active after cancelled touch'
+                # Safari may transition or rotate without delivering the
+                # pointercancel that a standard drag relies on. Those page
+                # lifecycle events must independently retire the gesture.
+                for interruption in ('visibilitychange','orientationchange','pagehide'):
+                    before_interrupt=page.evaluate(signature)
+                    cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':[{'x':cancel_x,'y':cancel_y,'id':10}]})
+                    cdp.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[{'x':cancel_x,'y':cancel_y-45,'id':10}]})
+                    during_interrupt=page.evaluate(signature)
+                    assert during_interrupt!=before_interrupt, f'{interruption} fixture did not start a moved gesture'
+                    if interruption=='visibilitychange':
+                        page.evaluate("window.__testDocumentHidden=true; document.dispatchEvent(new Event('visibilitychange'))")
+                    elif interruption=='orientationchange':
+                        page.evaluate("window.dispatchEvent(new Event('orientationchange'))")
+                    else:
+                        page.evaluate("window.dispatchEvent(new Event('pagehide'))")
+                    cdp.send('Input.dispatchTouchEvent',{'type':'touchCancel','touchPoints':[]})
+                    page.wait_for_timeout(250 if interruption=='orientationchange' else 100)
+                    after_interrupt=page.evaluate(signature)
+                    if interruption=='visibilitychange':
+                        assert after_interrupt==before_interrupt, f'{interruption} left a partial pitch or pan edit behind'
+                    elif interruption=='orientationchange':
+                        geometry=page.evaluate("""() => {const c=document.querySelector('#rollCanvas'),r=c.getBoundingClientRect();return {canvas:[c.width,c.height],rect:[r.width,r.height],viewport:[innerWidth,innerHeight]}}""")
+                        assert geometry['rect']==[canvas_box['width'],canvas_box['height']], f'orientationchange left a stale canvas size: {geometry}'
+                    assert page.locator('#undoBtn').is_disabled(), f'{interruption} created an Undo entry'
+                    if interruption=='visibilitychange':
+                        page.evaluate("window.__testDocumentHidden=false; document.dispatchEvent(new Event('visibilitychange'))")
         if browser_name=='mobile-long':
             assert 'iPhone省メモリ解析' in page.locator('#fileNameLabel').text_content(), 'long iPhone analysis did not select downsampled memory mode'
         final_expected_hz=220

@@ -262,6 +262,7 @@
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
+      cancelActiveInteraction();
       // iOS may suspend/kill background audio contexts; stop cleanly so
       // returning to Safari does not leave a stale source/play state.
       try { stopPlayback(); } catch (e) {}
@@ -280,6 +281,7 @@
     }
   });
   window.addEventListener('pageshow', () => {
+    cancelActiveInteraction();
     if (WORKER_IS_IOS && !worker) {
       try { createAudioWorker(); } catch (e) {}
     }
@@ -810,6 +812,7 @@
   function resizeCanvas() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const w = rollWrap.clientWidth, h = rollWrap.clientHeight;
+    if (!w || !h) return;
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
     canvas.style.width = w + 'px';
@@ -1567,6 +1570,19 @@
   }
   canvas.addEventListener('touchend', endPinch, { passive: true });
   canvas.addEventListener('touchcancel', endPinch, { passive: true });
+  function cancelActiveInteraction() {
+    if (activePointerId !== null) {
+      const pointerId = activePointerId;
+      cancelPointer({ pointerId });
+      try { if (canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId); } catch (err) {}
+    }
+    if (pinchActive) endPinch({ touches: [] });
+  }
+  window.addEventListener('pagehide', cancelActiveInteraction);
+  window.addEventListener('orientationchange', () => {
+    cancelActiveInteraction();
+    setTimeout(resizeCanvas, 200);
+  });
   function touchDist(touches) {
     const dx = touches[0].clientX - touches[1].clientX, dy = touches[0].clientY - touches[1].clientY;
     return Math.hypot(dx, dy);
@@ -2464,7 +2480,5 @@
       }
     }
   }
-
-  window.addEventListener('orientationchange', () => setTimeout(resizeCanvas, 200));
 
 })();
