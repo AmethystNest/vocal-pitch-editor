@@ -2125,6 +2125,8 @@
     const beforeMidi = seg.medianMidi;
     const afterMidi = seg.medianMidi + shift + lineMedian;
     const targetMidi = Math.round(afterMidi);
+    const orderedSegments = S.segments.slice().sort((a, b) => a.startTime - b.startTime);
+    const selectedPosition = orderedSegments.findIndex(item => item.id === seg.id) + 1;
     inspNote.textContent = PE.midiToNoteName(targetMidi);
     const totalShiftCents = (shift + lineMedian) * 100;
     const targetDevCents = (afterMidi - targetMidi) * 100;
@@ -2133,7 +2135,7 @@
     inspAfter.textContent = pitchStatLabel(afterMidi);
     inspTarget.textContent = PE.midiToNoteName(targetMidi);
     if (a11yStatus) {
-      a11yStatus.textContent = `選択中 ${PE.midiToNoteName(targetMidi)}。補正前 ${pitchStatLabel(beforeMidi)}、補正後 ${pitchStatLabel(afterMidi)}、目標 ${PE.midiToNoteName(targetMidi)}。左右矢印でノート選択、上下矢印で半音変更できます。`;
+      a11yStatus.textContent = `ノート ${selectedPosition} / ${orderedSegments.length}、選択中 ${PE.midiToNoteName(targetMidi)}。補正前 ${pitchStatLabel(beforeMidi)}、補正後 ${pitchStatLabel(afterMidi)}、目標 ${PE.midiToNoteName(targetMidi)}。左右矢印でノート選択、上下矢印で半音変更できます。`;
     }
     updateAccessibleNoteNav();
     const hasRef = suggestionDiffersEnough(seg);
