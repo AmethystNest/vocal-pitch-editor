@@ -411,6 +411,11 @@ def main():
             assert canvas_box and canvas_box['width']>0 and canvas_box['height']>0
             canvas.tap(position={'x':canvas_box['width']/2,'y':canvas_box['height']/2})
             page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
+            mobile_targets=page.locator('#inspector .closeX, #inspector .inspActionBtn, #inspector .strengthPreset, #inspector .strengthRange, #inspector .rowBtns button, #inspector .resetBtn, #inspector .playSegBtn').evaluate_all("els => els.map(el => ({id:el.id || el.className, height:el.getBoundingClientRect().height, width:el.getBoundingClientRect().width}))")
+            too_small=[target for target in mobile_targets if target['height']<44 or target['width']<44]
+            assert not too_small, f'mobile pitch inspector has undersized touch targets: {too_small}'
+            inspector_box=page.locator('#inspector').bounding_box()
+            assert inspector_box and inspector_box['y']>=0 and inspector_box['y']+inspector_box['height']<=metrics['height'], f'mobile pitch inspector exceeds viewport: {inspector_box}'
             initial_offset=page.locator('#inspOffset').inner_text()
             page.locator('#inspector [data-d=\"10\"]').tap()
             page.wait_for_function("document.querySelector('#undoBtn').disabled === false",timeout=5000)

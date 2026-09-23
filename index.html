@@ -188,7 +188,11 @@
     #inspector .noteName { font-size: 17px; }
     #inspector .offsetLine { margin-bottom: 8px; }
     #inspector .rowBtns { gap: 5px; }
-    #inspector .rowBtns button, #inspector .resetBtn, .playSegBtn { min-height: 38px; font-size: 12px; }
+    #inspector .closeX { width:44px; height:44px; flex:0 0 44px; }
+    #inspector .rowBtns button, #inspector .resetBtn, .playSegBtn,
+    .inspActionBtn, .strengthPreset { min-height:44px; font-size:12px; }
+    #inspector .rowBtns button, #inspector .resetBtn { height:44px; }
+    .strengthRange { height:44px; margin:4px 0 2px; }
     #toast { bottom: calc(14px + env(safe-area-inset-bottom)); }
   }
 
@@ -213,7 +217,7 @@
     .pitchStat { padding:6px 4px; }
     .pitchStat .v { font-size:11px; }
     .inspActions { gap:5px; }
-    .inspActionBtn { min-height:38px; }
+    .inspActionBtn { min-height:44px; }
   }
 
   /* ---------- correction strength v3 ---------- */
@@ -253,6 +257,15 @@
   /* v4: details no longer pop up on first note tap */
   #inspector { display:none; opacity:0; pointer-events:none; transform:translateY(8px); transition:opacity .14s ease, transform .14s ease; }
   #inspector.show { display:block; opacity:1; pointer-events:auto; transform:translateY(0); }
+
+  @media (max-width:700px) {
+    #inspector .closeX { width:44px; height:44px; flex:0 0 44px; }
+    #inspector .rowBtns { gap:2px; }
+    #inspector .rowBtns button, #inspector .resetBtn, .playSegBtn,
+    .inspActionBtn, .strengthPreset { min-height:44px; }
+    #inspector .rowBtns button, #inspector .resetBtn { height:44px; }
+    .strengthRange { height:44px; margin:4px 0 2px; }
+  }
 
   /* Mobile tap reliability: iPhone Safari + Android Chrome */
   #pitchCanvas, canvas {

@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v37 iPhone touch targets
+
+Pitch correction and inspector controls now provide at least 44×44 CSS-pixel touch targets on mobile, including the six fine-adjustment buttons, strength presets, slider, and close control. The six-button row tightens its gaps to remain fully tappable at 320px width. Mobile browser tests measure the actual rendered target sizes and verify the inspector remains within the screen. The Service Worker cache is v37.
+
 ## v36 accessible first-run flow
 
 Before a vocal track is loaded, VoiceOver and keyboard navigation now focus the audio picker instead of stepping through unavailable editing tools. The picker has a clear accessible name, remains available after import errors, and editor controls return to the normal focus order once analysis succeeds. Mobile browser checks cover the initial and loaded states. The Service Worker cache is v36.
@@ -10,7 +14,7 @@ On iPhone and Android, WAV encoding completes first and the export button then o
 
 ## v33 iPhone accessibility and PWA support
 
-PCM/float WAV files, including standard WAVE_FORMAT_EXTENSIBLE PCM/float subformats, are inspected from their RIFF header before full-file decoding. On iPhone, vocal and reference imports are checked against the combined estimated working set before calling `decodeAudioData`; rejected references leave the current vocal session intact. Compressed or unknown WAV subformats continue through Web Audio decoding and are checked against the actual decoded buffer. VoiceOver users can select adjacent detected notes with accessible previous/next controls; keyboard focus reveals those controls visually, the pitch canvas is linked to live pitch details, and recoverable failures use assertive announcements. Browser page zoom remains available, and the PWA shell, standalone manifest, matching launch colors, and iOS home-screen icon are covered by browser checks. Service Worker updates revalidate shell assets to avoid stale HTTP cache entries. The cache is v36.
+PCM/float WAV files, including standard WAVE_FORMAT_EXTENSIBLE PCM/float subformats, are inspected from their RIFF header before full-file decoding. On iPhone, vocal and reference imports are checked against the combined estimated working set before calling `decodeAudioData`; rejected references leave the current vocal session intact. Compressed or unknown WAV subformats continue through Web Audio decoding and are checked against the actual decoded buffer. VoiceOver users can select adjacent detected notes with accessible previous/next controls; keyboard focus reveals those controls visually, the pitch canvas is linked to live pitch details, and recoverable failures use assertive announcements. Browser page zoom remains available, and the PWA shell, standalone manifest, matching launch colors, and iOS home-screen icon are covered by browser checks. Service Worker updates revalidate shell assets to avoid stale HTTP cache entries. The cache is v37.
 
 `BROWSER=mobile-mini` exercises a 320×568 touch viewport, verifies oversized vocal and combined vocal/reference WAV preflights make zero decode calls, then loads, edits, plays, and exports a normal WAV.
 
