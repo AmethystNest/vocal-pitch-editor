@@ -56,16 +56,16 @@ def serve(https=False):
         if https:
             cert_path.unlink(missing_ok=True);key_path.unlink(missing_ok=True)
 
-def tone(path,rate=24000,seconds=1.4):
+def tone(path,rate=24000,seconds=1.4,hz=220):
     with wave.open(str(path),'wb') as f:
         f.setnchannels(1);f.setsampwidth(2);f.setframerate(rate)
-        samples=(int(0.25*32767*math.sin(2*math.pi*220*i/rate)) for i in range(int(rate*seconds)))
+        samples=(int(0.25*32767*math.sin(2*math.pi*hz*i/rate)) for i in range(int(rate*seconds)))
         f.writeframes(b''.join(struct.pack('<h',s) for s in samples))
 
 def main():
     browser_name=os.environ.get('BROWSER','chromium').lower()
     with TemporaryDirectory() as temp,serve(https=browser_name=='pwa-offline') as url,sync_playwright() as pw:
-        mobile_modes=('mobile','mobile-se','mobile-long')
+        mobile_modes=('mobile','mobile-se','mobile-long','mobile-cycle')
         expected_seconds=75.2 if browser_name=='mobile-long' else 1.4
         wav=Path(temp)/'tone.wav';tone(wav,seconds=expected_seconds)
         if browser_name=='webkit':
@@ -168,7 +168,7 @@ def main():
         assert 'tone.wav' in page.locator('#fileNameLabel').inner_text()
         assert not errors, f'JS errors: {errors}'
         assert not console_errors, f'Console errors: {console_errors}'
-        if browser_name in ('mobile','mobile-se'):
+        if browser_name in ('mobile','mobile-se','mobile-cycle'):
             # A short iPhone-UA guide exercises the combined-memory guard,
             # transferred mono analysis PCM, and full-rate reference playback.
             page.locator('#refFileInput').set_input_files(str(wav))
@@ -257,6 +257,26 @@ def main():
                 assert after_zoom!=before_zoom, 'two-finger pinch did not redraw the pitch canvas'
         if browser_name=='mobile-long':
             assert 'iPhone省メモリ解析' in page.locator('#fileNameLabel').text_content(), 'long iPhone analysis did not select downsampled memory mode'
+        final_expected_hz=220
+        if browser_name=='mobile-cycle':
+            # Replace a session with a decoded guide and completed edits. The
+            # old guide and undo state must be released before the new song is
+            # used, and the new export must contain only the replacement tone.
+            page.locator('#refFileInput').set_input_files(str(wav))
+            page.wait_for_function("document.querySelector('#refPlayBtn').disabled === false",timeout=30000)
+            page.locator('#refPlayBtn').tap()
+            page.wait_for_function("document.querySelector('#refPlayBtn').textContent.includes('⏸')",timeout=5000)
+            page.locator('#refPlayBtn').tap()
+            page.wait_for_function("document.querySelector('#refPlayBtn').textContent.includes('▶')",timeout=5000)
+            replacement=Path(temp)/'replacement.wav'
+            tone(replacement,seconds=expected_seconds,hz=330)
+            page.locator('#fileInput').set_input_files(str(replacement))
+            page.wait_for_function("document.querySelector('#fileNameLabel').textContent.includes('replacement.wav') && document.querySelector('#exportBtn').disabled === false",timeout=45000)
+            assert page.locator('#refPlayBtn').is_disabled(), 'old reference audio remained enabled after replacement'
+            assert page.locator('#undoBtn').is_disabled(), 'old edit history remained available after replacement'
+            assert not errors, f'JS errors after replacing the audio session: {errors}'
+            assert not console_errors, f'Console errors after replacing the audio session: {console_errors}'
+            final_expected_hz=330
         # Import intentionally leaves the full-song AudioBuffer unmaterialized
         # to reduce iPhone peak memory. Exercise Play so the lazy playback path
         # is covered by the browser test rather than only by static inspection.
@@ -283,6 +303,12 @@ def main():
             out_rate=f.getframerate()
             assert 22050 <= out_rate <= 192000
             assert abs((f.getnframes()/out_rate)-expected_seconds) < (2/out_rate)
+            raw=f.readframes(f.getnframes())
+        pcm=[int.from_bytes(raw[i:i+3],'little',signed=True) for i in range(0,len(raw),3)]
+        lo=int(out_rate*0.25);hi=min(len(pcm)-1,int(out_rate*1.1))
+        crossings=sum(1 for i in range(lo,hi) if pcm[i]<=0<pcm[i+1])
+        exported_hz=crossings*out_rate/(hi-lo)
+        assert abs(exported_hz-final_expected_hz)<3, f'export pitch/session mismatch: expected {final_expected_hz} Hz, measured {exported_hz:.1f} Hz'
         assert not errors, f'JS errors after export: {errors}'
         assert not console_errors, f'Console errors after export: {console_errors}'
         print(f'browser-e2e: PASS ({browser_name} upload -> Worker analysis -> lazy playback -> WAV export)')

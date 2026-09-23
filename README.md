@@ -25,6 +25,8 @@ Windows + Playwright Chromiumで `npm run test:browser` 相当のE2Eを実行し
 
 `BROWSER=mobile-se` は375×667・DPR 2のコンパクト画面でタッチ編集、二本指ズーム、お手本音源解析・再生を検証する。iPhoneではボーカルとお手本を合わせたメモリ見積りが上限に近い場合に参照音源を拒否し、理由を表示する。`BROWSER=pwa-offline` は一時的な自己署名HTTPSサーバーでService Workerを登録し、オフライン再読込後の音源解析・再生・書き出しまで検証する。HTTPS試験にはPythonの`cryptography`パッケージが必要。どちらもChromiumによる自動テストで、iPhone実機Safariの最終確認は別途必要。
 
+`BROWSER=mobile-cycle` は参照音源の再生中にメイン音源を差し替え、旧参照・Undo履歴が解除され、新しい音程だけを書き出すことを検証する。
+
 `BROWSER=webkit` はPlaywright WebKitの390×844モバイルシェルと横はみ出しを検証する。Windows配布のPlaywright WebKitにWeb Audio APIがない環境では、音声処理を実行せず部分PASSとして明示する。この結果はiPhone Safari音声対応の判定には使えない。
 
 ## v22 iPhone/PWA reliability
