@@ -1268,6 +1268,7 @@
   // drag ruler to seek)
   // ============================================================
   let activePointerId = null;
+  let pinchActive = false;
 
   function resetSegment(seg) {
     seg.shiftSemitones = 0; seg.fineCents = 0; seg.lineOffsets = null; seg.autoCurve = false;
@@ -1305,6 +1306,7 @@
   }
 
   canvas.addEventListener('pointerdown', (e) => {
+    if (pinchActive) return;
     if (!S.pitchTrack) { openAudioPicker(fileInput); return; }
     if (activePointerId !== null) return;
     activePointerId = e.pointerId;
@@ -1366,9 +1368,10 @@
 
     if (seg) {
       if (S.mode === 'line') {
+        const undoSnapshot = rememberBeforeEdit();
         if (!seg.lineOffsets) seg.lineOffsets = new Float64Array(seg.endFrame - seg.startFrame);
-    seg.autoCurve = false;
-        S.dragging = { kind: 'line', segId: seg.id, startX: px, startY: py, lastX: px, lastY: py, moved: false, undoSnapshot: rememberBeforeEdit() };
+        seg.autoCurve = false;
+        S.dragging = { kind: 'line', segId: seg.id, startX: px, startY: py, lastX: px, lastY: py, moved: false, undoSnapshot };
       } else {
         S.dragging = {
           kind: 'note', segId: seg.id, startX: px, startY: py,
@@ -1384,7 +1387,7 @@
   });
 
   canvas.addEventListener('pointermove', (e) => {
-    if (e.pointerId !== activePointerId) return;
+    if (pinchActive || e.pointerId !== activePointerId) return;
     const rect = canvas.getBoundingClientRect();
     const px = e.clientX - rect.left, py = e.clientY - rect.top;
 
@@ -1469,6 +1472,35 @@
   let pinchStartDist = null, pinchStartPxPerSec = null, pinchAnchorTime = null, pinchAnchorX = null;
   canvas.addEventListener('touchstart', (e) => {
     if (e.touches.length === 2) {
+      pinchActive = true;
+      // Pointer Events also fire for each touch. Retire the first finger's
+      // single-pointer gesture so a pinch cannot move a note or pan the view.
+      let cancelledGesture = false;
+      if (S.dragging && S.dragging.undoSnapshot) {
+        const snapshot = S.dragging.undoSnapshot;
+        S.segments = snapshot.segments.map(cloneSegmentForHistory);
+        S.segments.forEach((seg, index) => { seg.id = index; });
+        S.selectedSegId = snapshot.selectedSegId;
+        hideInspector();
+        updateInspector();
+        cancelledGesture = true;
+      }
+      if (S.panning && S.panning.mode === 'pan') {
+        S.viewStartSec = S.panning.startView;
+        S.minMidi = S.panning.startMinMidi;
+        S.maxMidi = S.panning.startMaxMidi;
+        cancelledGesture = true;
+      }
+      if (activePointerId !== null) {
+        try { canvas.releasePointerCapture(activePointerId); } catch (err) {}
+        activePointerId = null;
+      }
+      S.dragging = null;
+      S.panning = null;
+      if (cancelledGesture) {
+        updateUndoBtn();
+        render();
+      }
       pinchStartDist = touchDist(e.touches);
       pinchStartPxPerSec = S.pxPerSec;
       const rect = canvas.getBoundingClientRect();
@@ -1489,7 +1521,16 @@
       render();
     }
   }, { passive: false });
-  canvas.addEventListener('touchend', (e) => { if (e.touches.length < 2) { pinchStartDist = null; pinchAnchorTime = null; pinchAnchorX = null; } }, { passive: true });
+  function endPinch(e) {
+    if (e.touches.length < 2) {
+      pinchActive = false;
+      pinchStartDist = null;
+      pinchAnchorTime = null;
+      pinchAnchorX = null;
+    }
+  }
+  canvas.addEventListener('touchend', endPinch, { passive: true });
+  canvas.addEventListener('touchcancel', endPinch, { passive: true });
   function touchDist(touches) {
     const dx = touches[0].clientX - touches[1].clientX, dy = touches[0].clientY - touches[1].clientY;
     return Math.hypot(dx, dy);

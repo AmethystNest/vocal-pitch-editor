@@ -243,18 +243,21 @@ def main():
                 # the canvas image must be redrawn at the new time scale.
                 cdp=context.new_cdp_session(page)
                 pinch_x=canvas_box['x']+canvas_box['width']/2
-                pinch_y=canvas_box['y']+canvas_box['height']*0.72
+                # Put the first finger over the detected note and move it
+                # diagonally; the pinch must not leak into a pitch drag.
+                pinch_y=canvas_box['y']+canvas_box['height']*0.5
                 signature="""() => {
                     const c=document.querySelector('#rollCanvas'),x=c.getContext('2d').getImageData(0,0,c.width,c.height).data;
                     let h=2166136261; for(let i=0;i<x.length;i+=37){h^=x[i];h=Math.imul(h,16777619)} return h>>>0;
                 }"""
                 before_zoom=page.evaluate(signature)
                 cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':[{'x':pinch_x-22,'y':pinch_y,'id':1},{'x':pinch_x+22,'y':pinch_y,'id':2}]})
-                cdp.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[{'x':pinch_x-55,'y':pinch_y,'id':1},{'x':pinch_x+55,'y':pinch_y,'id':2}]})
+                cdp.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[{'x':pinch_x-55,'y':pinch_y-35,'id':1},{'x':pinch_x+55,'y':pinch_y,'id':2}]})
                 cdp.send('Input.dispatchTouchEvent',{'type':'touchEnd','touchPoints':[]})
                 page.wait_for_timeout(100)
                 after_zoom=page.evaluate(signature)
                 assert after_zoom!=before_zoom, 'two-finger pinch did not redraw the pitch canvas'
+                assert page.locator('#undoBtn').is_disabled(), 'pinch gesture leaked into a note edit'
         if browser_name=='mobile-long':
             assert 'iPhone省メモリ解析' in page.locator('#fileNameLabel').text_content(), 'long iPhone analysis did not select downsampled memory mode'
         final_expected_hz=220
