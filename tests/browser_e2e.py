@@ -411,6 +411,15 @@ def main():
             page.keyboard.press('Enter')
             page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
             assert page.locator('#a11yStatus').text_content().startswith('ノート 1 / '), 'VoiceOver next-note control did not announce the selected note position'
+            focused_edge=page.evaluate("""() => ({
+                active:document.activeElement.id,
+                nextDisabled:document.querySelector('#a11yNextNote').disabled,
+                nextAriaDisabled:document.querySelector('#a11yNextNote').getAttribute('aria-disabled'),
+                navFocused:document.querySelector('#accessibleNoteNav').matches(':focus-within'),
+                navTop:document.querySelector('#accessibleNoteNav').getBoundingClientRect().top,
+                panelBottom:document.querySelector('#inspector').getBoundingClientRect().bottom
+            })""")
+            assert focused_edge['active']=='a11yNextNote' and not focused_edge['nextDisabled'] and focused_edge['nextAriaDisabled']=='true' and focused_edge['navFocused'] and focused_edge['navTop']>=focused_edge['panelBottom'], f'edge-note selection dropped VoiceOver focus or obscured the inspector: {focused_edge}'
             assistive_layout=page.evaluate("""() => {
                 const nav=document.querySelector('#accessibleNoteNav').getBoundingClientRect();
                 const panel=document.querySelector('#inspector').getBoundingClientRect();
@@ -439,14 +448,25 @@ def main():
                 assert page.locator('#a11yStatus').text_content().startswith('ノート 1 / 3、'), 'VoiceOver navigation did not select the first of three notes'
                 page.keyboard.press('Enter')
                 assert page.locator('#a11yStatus').text_content().startswith('ノート 2 / 3、'), 'VoiceOver next-note action did not advance through the sequence'
+                page.keyboard.press('Enter')
+                assert page.locator('#a11yStatus').text_content().startswith('ノート 3 / 3、'), 'VoiceOver next-note action did not reach the final note'
+                assert page.evaluate("document.activeElement.id === 'a11yNextNote' && document.querySelector('#a11yNextNote').getAttribute('aria-disabled') === 'true' && document.querySelector('#accessibleNoteNav').matches(':focus-within')"), 'last-note navigation dropped VoiceOver focus instead of announcing the unavailable next action'
                 page.locator('#a11yPreviousNote').focus();page.keyboard.press('Enter')
-                assert page.locator('#a11yStatus').text_content().startswith('ノート 1 / 3、'), 'VoiceOver previous-note action did not return to the prior note'
+                assert page.locator('#a11yStatus').text_content().startswith('ノート 2 / 3、'), 'VoiceOver previous-note action did not return to the prior note'
+                page.keyboard.press('Enter')
+                assert page.locator('#a11yStatus').text_content().startswith('ノート 1 / 3、'), 'VoiceOver previous-note action did not return to the first note'
+                assert page.evaluate("document.activeElement.id === 'a11yPreviousNote' && document.querySelector('#a11yPreviousNote').getAttribute('aria-disabled') === 'true' && document.querySelector('#accessibleNoteNav').matches(':focus-within')"), 'first-note navigation dropped VoiceOver focus instead of announcing the unavailable previous action'
                 sequence_layout=page.evaluate("""() => {
                     const nav=document.querySelector('#accessibleNoteNav').getBoundingClientRect();
                     const panel=document.querySelector('#inspector').getBoundingClientRect();
                     return {width:document.documentElement.scrollWidth,viewport:innerWidth,navTop:nav.top,panelBottom:panel.bottom,separated:nav.top>=panel.bottom};
                 }""")
                 assert sequence_layout['width']<=sequence_layout['viewport'] and sequence_layout['separated'], f'compact VoiceOver note navigation overlaps controls or overflows: {sequence_layout}'
+                canvas.focus()
+                page.locator('#inspClose').tap()
+                page.wait_for_function("getComputedStyle(document.querySelector('#inspector')).display === 'none' && document.querySelector('#inspector').getAttribute('aria-hidden') === 'true' && !document.querySelector('#inspector').classList.contains('show')",timeout=5000)
+                page.locator('#fileInput').set_input_files(str(audio_file))
+                page.wait_for_function("!document.querySelector('#accessibleNoteNav').hidden && document.querySelector('#rollCanvas').tabIndex === 0",timeout=15000)
             canvas_box=canvas.bounding_box()
             assert canvas_box and canvas_box['width']>0 and canvas_box['height']>0
             canvas.tap(position={'x':canvas_box['width']/2,'y':canvas_box['height']/2})

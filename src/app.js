@@ -2077,14 +2077,19 @@
     if (!segments || !segments.length) return;
     const ordered = segments.slice().sort((a, b) => a.startTime - b.startTime);
     const current = ordered.findIndex(seg => seg.id === S.selectedSegId);
-    a11yPreviousNote.disabled = current === 0;
-    a11yNextNote.disabled = current === ordered.length - 1;
+    // Keep edge controls focusable. Native disabled removes the focused
+    // VoiceOver button from the focus order as soon as its note is selected.
+    a11yPreviousNote.disabled = false;
+    a11yNextNote.disabled = false;
+    a11yPreviousNote.setAttribute('aria-disabled', String(current === 0));
+    a11yNextNote.setAttribute('aria-disabled', String(current === ordered.length - 1));
   }
 
   function selectNoteByDirection(direction) {
     if (!S.segments || !S.segments.length) return;
     const ordered = S.segments.slice().sort((a, b) => a.startTime - b.startTime);
     const current = ordered.findIndex(seg => seg.id === S.selectedSegId);
+    if ((direction < 0 && current === 0) || (direction > 0 && current === ordered.length - 1)) return;
     const next = current < 0 ? (direction > 0 ? 0 : ordered.length - 1) :
       Math.max(0, Math.min(ordered.length - 1, current + direction));
     showInspectorForSegment(ordered[next].id);
@@ -2219,7 +2224,12 @@
     toastMsg(`お手本へ ${Math.round(S.correctionStrength * 100)}% 補正しました`);
   });
 
-  $('inspClose').addEventListener('click', () => { S.selectedSegId = null; updateInspector(); render(); });
+  $('inspClose').addEventListener('click', () => {
+    S.selectedSegId = null;
+    hideInspector();
+    updateAccessibleNoteNav();
+    render();
+  });
   $('inspReset').addEventListener('click', () => {
     if (S.selectedSegId == null) return;
     const seg = S.segments.find(s => s.id === S.selectedSegId);

@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v43 VoiceOver note-navigation focus
+
+The previous/next note controls remain keyboard-focusable at the first and last notes while exposing the unavailable direction with `aria-disabled`. This prevents iOS VoiceOver focus from disappearing when a boundary note is selected. Closing the pitch inspector now clears its visible and accessibility state consistently. Mobile E2E covers one-note boundaries, forward/backward navigation through three notes, compact-screen separation, and inspector dismissal. The Service Worker cache is v43.
+
 ## v42 reference correction feedback
 
 Bulk correction is disabled when the reference has no matching notes or when every detected note already matches the current pitch. The analysis message reports the number of actionable corrections or explains why none can be applied. Mobile browser E2E checks the identical-reference no-op case. The Service Worker cache is v42. Mobile accessibility E2E also checks VoiceOver-style next/previous navigation through three notes, pitch announcements, and inspector clearance at compact widths.
