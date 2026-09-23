@@ -3,6 +3,7 @@ Set BROWSER=webkit for Safari-engine coverage, BROWSER=mobile for an iPhone-size
 touch run, BROWSER=mobile-se for a compact iPhone viewport, BROWSER=mobile-long
 to exercise long-file memory handling, or BROWSER=pwa-offline to verify offline use.
 BROWSER=mobile-share-fallback and BROWSER=mobile-share-cancel simulate iOS share-sheet outcomes.
+BROWSER=mobile-mp3 and BROWSER=mobile-m4a cover compressed formats; these modes require FFmpeg.
 Chromium simulations do not replace iPhone hardware testing.
 """
 from pathlib import Path
@@ -10,6 +11,7 @@ from tempfile import TemporaryDirectory
 import tempfile
 import uuid
 import math, struct, wave, os
+import shutil, subprocess
 import ssl
 import mimetypes
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -66,10 +68,24 @@ def tone(path,rate=24000,seconds=1.4,hz=220):
 def main():
     browser_name=os.environ.get('BROWSER','chromium').lower()
     with TemporaryDirectory() as temp,serve(https=browser_name=='pwa-offline') as url,sync_playwright() as pw:
-        mobile_modes=('mobile','mobile-se','mobile-long','mobile-cycle','mobile-share-fallback','mobile-share-cancel')
+        mobile_modes=('mobile','mobile-se','mobile-long','mobile-cycle','mobile-share-fallback','mobile-share-cancel','mobile-mp3','mobile-m4a')
         mobile_share_modes=('mobile-share-fallback','mobile-share-cancel')
         expected_seconds=75.2 if browser_name=='mobile-long' else 1.4
         wav=Path(temp)/'tone.wav';tone(wav,seconds=expected_seconds)
+        audio_file=wav
+        if browser_name in ('mobile-mp3','mobile-m4a'):
+            ffmpeg=os.environ.get('FFMPEG_PATH') or shutil.which('ffmpeg')
+            if not ffmpeg:
+                raise RuntimeError('MP3/M4A browser coverage requires FFmpeg (set FFMPEG_PATH or add ffmpeg to PATH)')
+            audio_file=Path(temp)/('tone.mp3' if browser_name=='mobile-mp3' else 'tone.m4a')
+            encode_args=[ffmpeg,'-y','-hide_banner','-loglevel','error','-i',str(wav),'-vn']
+            if browser_name=='mobile-mp3':
+                encode_args += ['-c:a','libmp3lame','-b:a','128k']
+            else:
+                encode_args += ['-c:a','aac','-b:a','128k','-movflags','+faststart']
+            encode_args.append(str(audio_file))
+            encoded=subprocess.run(encode_args,capture_output=True,text=True)
+            assert encoded.returncode==0 and audio_file.is_file(), f'could not create {audio_file.suffix} fixture: {encoded.stderr}'
         if browser_name=='webkit':
             browser=pw.webkit.launch(headless=True)
         else:
@@ -179,7 +195,7 @@ def main():
             assert (metrics['width'],metrics['height'])==expected_viewport, f'mobile viewport mismatch: {metrics}'
             assert metrics['documentWidth']<=metrics['width'], f'horizontal overflow on mobile: {metrics}'
             assert metrics['touchPoints']>0, f'touch input unavailable: {metrics}'
-        page.locator('#fileInput').set_input_files(str(wav))
+        page.locator('#fileInput').set_input_files(str(audio_file))
         try:
             page.wait_for_function("document.querySelector('#exportBtn').disabled === false",timeout=45000)
         except PlaywrightTimeoutError:
@@ -193,7 +209,7 @@ def main():
             raise AssertionError(
                 f'analysis timeout: state={state}; pageErrors={errors}; consoleErrors={console_errors}'
             )
-        assert 'tone.wav' in page.locator('#fileNameLabel').inner_text()
+        assert audio_file.name in page.locator('#fileNameLabel').inner_text()
         if browser_name in mobile_modes:
             assert page.locator('#fileInput').evaluate('(input) => input.value') == '', 'main file picker value was not cleared after selection'
         assert not errors, f'JS errors: {errors}'
@@ -402,7 +418,8 @@ def main():
             # 24 kHz fixture commonly becomes 48 kHz in Chromium.
             out_rate=f.getframerate()
             assert 22050 <= out_rate <= 192000
-            assert abs((f.getnframes()/out_rate)-expected_seconds) < (2/out_rate)
+            duration_tolerance=0.08 if audio_file.suffix.lower() in ('.mp3','.m4a') else 2/out_rate
+            assert abs((f.getnframes()/out_rate)-expected_seconds) < duration_tolerance
             raw=f.readframes(f.getnframes())
         pcm=[int.from_bytes(raw[i:i+3],'little',signed=True) for i in range(0,len(raw),3)]
         lo=int(out_rate*0.25);hi=min(len(pcm)-1,int(out_rate*1.1))
