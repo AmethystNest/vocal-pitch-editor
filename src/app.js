@@ -2526,6 +2526,34 @@
   // ============================================================
   // Export
   // ============================================================
+  let pendingExportFile = null;
+  let pendingExportAction = null;
+
+  function setExportAction(btn, action) {
+    pendingExportAction = action;
+    btn.dataset.exportAction = action;
+    const isShare = action === 'share';
+    btn.innerHTML = isShare ? '↗<span class="toolLabel">共有</span>' : '⬇<span class="toolLabel">保存WAV</span>';
+    btn.title = isShare ? 'タップして共有シートを開く' : 'タップしてWAVを端末に保存';
+    btn.setAttribute('aria-label', isShare ? 'WAVを共有' : 'WAVを端末に保存');
+  }
+
+  function resetExportAction(btn) {
+    pendingExportFile = null;
+    pendingExportAction = null;
+    delete btn.dataset.exportAction;
+    btn.innerHTML = '⬇<span class="toolLabel">書き出し</span>';
+    btn.title = '24-bit WAVで書き出し';
+    btn.removeAttribute('aria-label');
+  }
+
+  function exportFilename(baseName) {
+    const safeBase = String(baseName || 'audio')
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+      .replace(/[. ]+$/g, '').slice(0, 120) || 'audio';
+    return `${safeBase}_edited.wav`;
+  }
+
   function downloadBlob(blob, outName) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2533,28 +2561,80 @@
     a.download = outName;
     a.rel = 'noopener';
     document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    try {
+      a.click();
+    } finally {
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    }
   }
 
   $('exportBtn').addEventListener('click', async () => {
     const btn = $('exportBtn');
+    if (pendingExportFile) {
+      try {
+        if (pendingExportAction === 'share') {
+          try {
+            const result = navigator.share({ files: [pendingExportFile], title: pendingExportFile.name });
+            if (!result || typeof result.then !== 'function') throw new Error('Web Share did not start');
+            // Keep the toolbar available while iOS presents the share sheet.
+            // If the user dismisses it with a transient share error, they can
+            // immediately use the offered Save action without an extra wait.
+            btn.disabled = false;
+            await result;
+            resetExportAction(btn);
+            toastMsg('書き出しました');
+          } catch (shareErr) {
+            if (shareErr && shareErr.name === 'AbortError') {
+              resetExportAction(btn);
+              toastMsg('共有をキャンセルしました');
+            } else {
+              console.warn('Native share could not start; offering a fresh-gesture download', shareErr);
+              setExportAction(btn, 'download');
+              toastMsg('共有を開始できませんでした。もう一度タップして端末に保存してください。', 5000, true);
+            }
+          }
+        } else {
+          btn.disabled = true;
+          downloadBlob(pendingExportFile, pendingExportFile.name);
+          resetExportAction(btn);
+          toastMsg('書き出しました');
+        }
+      } catch (err) {
+        console.error(err);
+        toastMsg('書き出しに失敗しました', 3500, true);
+      } finally {
+        btn.disabled = false;
+      }
+      return;
+    }
     btn.disabled = true;
-    const prevLabel = btn.textContent;
-    btn.textContent = '書き出し中...';
+    const previousMarkup = btn.innerHTML;
+    const previousTitle = btn.title;
+    const previousAriaLabel = btn.getAttribute('aria-label');
+    btn.innerHTML = '…<span class="toolLabel">準備中</span>';
     try {
       await flushResynth();
       const exportT0 = performance.now();
       const exportChannels = S.editedChannels || S.origChannels;
       const blob = await PE.encodeWavChunked(exportChannels, S.sr, { framesPerChunk: IS_IOS ? 16384 : 32768 });
       console.info(`[PitchEditor] WAV encode ${(performance.now() - exportT0).toFixed(0)} ms, ${(blob.size / 1048576).toFixed(1)} MB`);
-      const outName = S.fileBaseName + '_edited.wav';
+      const outName = exportFilename(S.fileBaseName);
       const outFile = new File([blob], outName, { type: 'audio/wav' });
+      const canShareFile = !!(navigator.share && navigator.canShare && navigator.canShare({ files: [outFile] }));
+
+      // Encoding may outlast Safari's transient activation. Ask for a fresh
+      // tap after encoding so both the share sheet and download start reliably.
+      if (IS_IOS || IS_ANDROID) {
+        pendingExportFile = outFile;
+        setExportAction(btn, canShareFile ? 'share' : 'download');
+        toastMsg('WAVの準備ができました。下のボタンをもう一度タップしてください。', 5000);
+        return;
+      }
 
       // iPhone Safari handles a real File through the native share sheet more reliably
       // than a synthetic <a download> in some versions.
-      if (navigator.share && navigator.canShare && navigator.canShare({ files: [outFile] })) {
+      if (canShareFile) {
         try {
           await navigator.share({ files: [outFile], title: outName });
           toastMsg('書き出しました');
@@ -2580,7 +2660,12 @@
       toastMsg('書き出しに失敗しました', 3500, true);
     } finally {
       btn.disabled = false;
-      btn.textContent = prevLabel;
+      if (!pendingExportFile) {
+        btn.innerHTML = previousMarkup;
+        btn.title = previousTitle;
+        if (previousAriaLabel === null) btn.removeAttribute('aria-label');
+        else btn.setAttribute('aria-label', previousAriaLabel);
+      }
     }
   });
   // Ensures S.editedChannels is fully caught up with every edit made so
