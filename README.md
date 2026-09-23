@@ -1,4 +1,4 @@
-# Vocal Pitch Editor v18
+# Vocal Pitch Editor v22
 
 Development source is modularized without changing the confirmed UI or DSP behavior.
 
@@ -19,4 +19,8 @@ Run `npm run check` for syntax checks. Serve over HTTP(S) for Worker/PWA testing
 ## v21 browser E2E
 `npm run test:browser` starts a local HTTP server, uses Playwright with Chromium, uploads a generated 220 Hz WAV, waits for Worker analysis, downloads the 24-bit WAV, and validates sample rate, channel count and duration. Requires Python Playwright and Chromium. Not part of CI until runner setup is validated.
 
-This execution environment blocked Chromium's navigation to 127.0.0.1 (`ERR_BLOCKED_BY_ADMINISTRATOR`), so browser E2E is **not verified here**. Do not interpret this as an application test failure or a pass. Real vocal, editing gestures and iPhone Safari still require testing.
+Windows + Playwright Chromiumで `npm run test:browser` 相当のE2Eを実行し、アップロード → Worker解析 → 24-bit WAV書き出しまでPASSを確認済み。Web Audioは入力ファイルのサンプルレートではなくAudioContextのネイティブレートへデコードするため、E2Eは出力レートそのものではなく、対応範囲・チャンネル数・24-bit深度・時間長を検証する。実ボーカルの聴感、編集ジェスチャ、iPhone Safari実機は別途最終確認が必要。
+
+## v22 iPhone/PWA reliability
+
+GitHub Pages向けの実ファイル配置を `src/` / `tests/` に統一。iPhoneの未読込キャンバスタップも共通のファイル選択経路を使う。Service Workerはv22キャッシュへ更新し、インストール後に即時activateできるようにして、ホーム画面PWAが旧v19 JavaScriptを保持し続ける問題を防ぐ。

@@ -10,9 +10,10 @@
   let msgId = 0;
   const pending = new Map();
 
-  try {
-    worker = new Worker('./src/worker.js');
-    worker.onmessage = (e) => {
+  function createAudioWorker() {
+    if (worker) return worker;
+    const nextWorker = new Worker('./src/worker.js');
+    nextWorker.onmessage = (e) => {
       const msg = e.data;
       const cb = pending.get(msg.id);
       if (!cb) return;
@@ -20,7 +21,7 @@
       if (msg.type === 'error') cb.reject(new Error(msg.message));
       else cb.resolve(msg);
     };
-    worker.onerror = (ev) => {
+    nextWorker.onerror = (ev) => {
       // Safari can create a Blob Worker successfully and then fail it only
       // when the first real job runs. Never leave pending Promises hanging,
       // otherwise the UI can show a new pitch while playback still uses the old buffer.
@@ -29,10 +30,16 @@
         try { cb.reject(err); } catch (e) {}
       }
       pending.clear();
-      try { worker.terminate(); } catch (e) {}
-      worker = null;
-      console.warn('Audio Worker disabled after runtime failure', ev);
+      try { nextWorker.terminate(); } catch (e) {}
+      if (worker === nextWorker) worker = null;
+      console.warn('Audio Worker will be recreated after runtime failure', ev);
     };
+    worker = nextWorker;
+    return nextWorker;
+  }
+
+  try {
+    createAudioWorker();
   } catch (e) {
     worker = null;
   }
@@ -82,16 +89,20 @@
     if (WORKER_IS_IOS && payload && payload.preferMainThread) {
       return mainThreadCall(payload);
     }
+    if (!worker) {
+      try { createAudioWorker(); } catch (e) {}
+    }
     if (!worker) return mainThreadCall(payload);
+    const activeWorker = worker;
     const id = ++msgId;
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject });
       try {
-        worker.postMessage(Object.assign({ id }, payload), transfer || []);
+        activeWorker.postMessage(Object.assign({ id }, payload), transfer || []);
       } catch (err) {
         pending.delete(id);
-        try { worker.terminate(); } catch (e) {}
-        worker = null;
+        try { activeWorker.terminate(); } catch (e) {}
+        if (worker === activeWorker) worker = null;
         // postMessage failed before ownership transfer completed; retry locally.
         mainThreadCall(payload).then(resolve, reject);
       }
@@ -171,6 +182,7 @@
     audioRevision: 0,
     pendingPlaybackRequest: false,
     pendingResynthSet: new Set(),
+    audioSessionId: 0,
     undoStack: [],
     undoLimit: 10,
 
@@ -254,6 +266,25 @@
       // returning to Safari does not leave a stale source/play state.
       try { stopPlayback(); } catch (e) {}
       try { stopReference(); } catch (e) {}
+    } else {
+      if (WORKER_IS_IOS && !worker) {
+        try { createAudioWorker(); } catch (e) {}
+      }
+      // Safari/PWA can leave an existing AudioContext suspended after a
+      // background/foreground cycle. Resume it opportunistically; if iOS
+      // still requires a gesture, the normal pointer/touch unlock path will
+      // retry on the user's next interaction.
+      if (S.audioCtx && S.audioCtx.state === 'suspended') {
+        S.audioCtx.resume().catch(() => {});
+      }
+    }
+  });
+  window.addEventListener('pageshow', () => {
+    if (WORKER_IS_IOS && !worker) {
+      try { createAudioWorker(); } catch (e) {}
+    }
+    if (S.audioCtx && S.audioCtx.state === 'suspended') {
+      S.audioCtx.resume().catch(() => {});
     }
   });
 
@@ -306,6 +337,12 @@
   }
 
   function releaseAudioMemory() {
+    S.audioSessionId++;
+    clearTimeout(S.resynthTimer);
+    S.resynthTimer = null;
+    S.pendingFullResynth = false;
+    S.pendingResynthSet.clear();
+    S.resynthQueued = false;
     stopPlayback();
     stopReference();
     if (S.soloSource) {
@@ -357,6 +394,14 @@
     return { signal: out, sr: outSr, downsampled: true };
   }
 
+  function releaseAnalysisSource(source, prepared) {
+    // Downsampling creates a new, much smaller analysis buffer. Do not keep
+    // the full-rate mono source alive alongside it on memory-constrained iOS.
+    // (When no downsampling occurred, source === prepared.signal and must stay.)
+    if (prepared && prepared.signal !== source) source = null;
+    return source;
+  }
+
   function estimateDecodedMemoryMB(decoded) {
     // Rough peak working-set estimate: browser AudioBuffer (Float32),
     // Float32 original+edited audio, Float64 mono analysis and resynthesis temporaries.
@@ -389,14 +434,21 @@
     stopPlayback();
     stopReference();
     if (S.soloSource) { try { S.soloSource.onended = null; S.soloSource.stop(); } catch (e) {} S.soloSource = null; }
-    S.selectedSegId = null; S.pitchTrack = null;
-    S.referenceLoaded = false; S.referenceBuffer = null; S.refAlignXs = null; S.refAlignYs = null;
+    // Drop the previous song before decoding the replacement. On iPhone a
+    // second decode can otherwise overlap the old original+edited PCM with
+    // the new AudioBuffer and briefly double the working set.
+    releaseAudioMemory();
+    const audioSessionId = S.audioSessionId;
+    S.selectedSegId = null;
+    S.referenceLoaded = false; S.refAlignXs = null; S.refAlignYs = null;
     $('applyAllBtn').disabled = true; $('refPlayBtn').disabled = true;
     S.fileBaseName = file.name.replace(/\.[^/.]+$/, '');
     loadingScreen.style.display = 'flex';
     loadingStatus.textContent = '読み込み中...';
+    setControlsEnabled(false);
     try {
       const decoded = await decodeAudioFile(file);
+      if (audioSessionId !== S.audioSessionId) return;
       S.sr = decoded.sampleRate;
       S.numCh = decoded.numberOfChannels;
 
@@ -411,11 +463,12 @@
       }
 
       // Build the analysis mono directly from AudioBuffer first.
-      const monoFull = makeMonoForAnalysis(decoded);
+      let monoFull = makeMonoForAnalysis(decoded);
       const analysis = prepareAnalysisSignal(monoFull, S.sr, durationSec);
       S.analysisDownsampled = analysis.downsampled;
       S.analysisSampleRate = analysis.sr;
       S.monoSignal = analysis.signal;
+      monoFull = releaseAnalysisSource(monoFull, analysis);
 
       // Keep original-rate audio for actual listening/rendering.
       S.origChannels = [];
@@ -429,6 +482,7 @@
       await new Promise(r => setTimeout(r, 20));
       const analyzeT0 = performance.now();
       const analyzed = await workerCall({ type: 'analyze', signal: S.monoSignal, sr: analysis.sr, opts: yinOptsForSampleRate(analysis.sr) });
+      if (audioSessionId !== S.audioSessionId) return;
       console.info(`[PitchEditor] F0+note analysis ${(performance.now() - analyzeT0).toFixed(0)} ms`);
       S.pitchTrack = analyzed.pitchTrack;
       S.segments = analyzed.segments;
@@ -447,7 +501,10 @@
       // first time any edit ran (every future resynth, including resets,
       // would then rebuild from already-edited source instead of the truth).
       S.editedChannels = S.origChannels.map((c) => Float32Array.from(c));
-      await rebuildEditedBuffer();
+      // Keep the playback AudioBuffer lazy. Creating it here duplicates the
+      // whole edited song again at the exact point where iPhone import memory
+      // is still near its peak. Playback/preview already rebuild it on demand.
+      S.editedBuffer = null;
 
       $('fileNameLabel').textContent = file.name + (S.analysisDownsampled ? '・iPhone省メモリ解析' : '');
       loadingScreen.style.display = 'none';
@@ -457,6 +514,19 @@
       $('emptyUpload').classList.add('hidden');
       render();
     } catch (err) {
+      // If a newer import superseded this one, its session owns the UI and
+      // audio state. A late failure from the old import must not tear it down.
+      if (audioSessionId !== S.audioSessionId) return;
+      // A failed replacement must leave a clean empty session. In particular,
+      // do not retain partially copied PCM from a decode/analysis that ran out
+      // of memory on iPhone, and do not leave editor controls pointing at it.
+      releaseAudioMemory();
+      S.selectedSegId = null;
+      S.referenceLoaded = false;
+      $('applyAllBtn').disabled = true;
+      $('refPlayBtn').disabled = true;
+      setControlsEnabled(false);
+      $('emptyUpload').classList.remove('hidden');
       loadingScreen.style.display = 'none';
       const msg = (err && err.message) ? err.message : String(err);
       toastMsg(`音声を読み込めませんでした。WAV / MP3 / M4A(AAC) を推奨します。${msg ? ' (' + msg + ')' : ''}`, 5000);
@@ -504,23 +574,27 @@
 
   async function loadReference(file) {
     if (!S.pitchTrack) { toastMsg('先にボーカル音源を読み込んでください'); return; }
+    const audioSessionId = S.audioSessionId;
     toastMsg('リファレンスを解析中...', 5000);
     $('refBtn').disabled = true;
     try {
       const decoded = await decodeAudioFile(file);
+      if (audioSessionId !== S.audioSessionId) return;
+      const durationSec = decoded.duration || (decoded.length / decoded.sampleRate);
       let refMono;
-      if (decoded.numberOfChannels > 1) {
-        const c0 = decoded.getChannelData(0), c1 = decoded.getChannelData(1);
-        refMono = new Float64Array(c0.length);
-        for (let i = 0; i < c0.length; i++) refMono[i] = (c0[i] + c1[i]) / 2;
-      } else {
-        refMono = Float64Array.from(decoded.getChannelData(0));
-      }
+      // Reuse the iPhone analysis path used by the main vocal: a full-rate
+      // Float64 reference can add tens of MB while the vocal's original and
+      // edited PCM are already resident. Long references only need F0/DTW at
+      // analysis rate; keep the decoded AudioBuffer full-rate for playback.
+      const refMonoFull = makeMonoForAnalysis(decoded);
+      const refAnalysis = prepareAnalysisSignal(refMonoFull, decoded.sampleRate, durationSec);
+      refMono = refAnalysis.signal;
       const vocalSegsPlain = S.segments.map((s) => ({ startTime: s.startTime, endTime: s.endTime, startFrame: s.startFrame, endFrame: s.endFrame, noteMidi: s.noteMidi }));
       const res = await workerCall(
-        { type: 'reference', refSignal: refMono, refSr: decoded.sampleRate, opts: yinOptsForSampleRate(decoded.sampleRate), vocalPitchTrack: S.pitchTrack, vocalSegments: vocalSegsPlain },
+        { type: 'reference', refSignal: refMono, refSr: refAnalysis.sr, opts: yinOptsForSampleRate(refAnalysis.sr), vocalPitchTrack: S.pitchTrack, vocalSegments: vocalSegsPlain },
         [refMono.buffer]
       );
+      if (audioSessionId !== S.audioSessionId) return;
       res.suggestions.forEach((sugg, i) => { if (S.segments[i]) { S.segments[i].refSuggestMidi = sugg; S.segments[i].refExpression = res.expressions && res.expressions[i] ? Float64Array.from(res.expressions[i]) : null; } });
       S.referenceLoaded = true;
       S.referenceBuffer = decoded; // kept at full quality (original channel count) for playback
@@ -533,10 +607,13 @@
       const n = res.suggestions.filter((s) => s != null).length;
       toastMsg(n > 0 ? `リファレンス解析完了(候補${n}件)` : 'リファレンスを解析しましたが、対応する候補が見つかりませんでした', 3000);
     } catch (err) {
+      if (audioSessionId !== S.audioSessionId) return;
       console.error(err);
       toastMsg('リファレンスを読み込めませんでした。iPhoneでは WAV / MP3 / M4A(AAC) を推奨します。', 4500);
     } finally {
-      $('refBtn').disabled = false;
+      // Do not let an obsolete reference request re-enable controls owned by
+      // a newer main-audio session.
+      if (audioSessionId === S.audioSessionId) $('refBtn').disabled = false;
     }
   }
 
@@ -1108,7 +1185,7 @@
       // Search only a small local neighborhood instead of the complete note.
       const { times, f0s, voiced, hopSize } = S.pitchTrack;
       let nearestY = null;
-      const frameDt = (hopSize || 512) / (S.analysisSr || S.sr);
+      const frameDt = (hopSize || 512) / (S.analysisSampleRate || S.sr);
       let center = Math.round((t - times[0]) / frameDt);
       center = Math.max(seg.startFrame, Math.min(seg.endFrame - 1, center));
       let best = -1, bestDt = Infinity;
@@ -1204,7 +1281,7 @@
   }
 
   canvas.addEventListener('pointerdown', (e) => {
-    if (!S.pitchTrack) { fileInput.click(); return; }
+    if (!S.pitchTrack) { openAudioPicker(fileInput); return; }
     if (activePointerId !== null) return;
     activePointerId = e.pointerId;
     try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* no active pointer to capture -- safe to continue without it */ }
@@ -1933,6 +2010,7 @@
     if (S.resynthBusy) { S.resynthQueued = true; return; }
     if (!S.pendingFullResynth && S.pendingResynthSet.size === 0) return;
     S.resynthBusy = true;
+    const audioSessionId = S.audioSessionId;
     const renderingRevision = S.editRevision;
     const wasPlaying = S.playing;
     const resumeAt = getPlayheadTime();
@@ -1941,12 +2019,16 @@
       if (S.pendingFullResynth) {
         S.pendingFullResynth = false;
         S.pendingResynthSet.clear();
-        await doFullResynth();
+        await doFullResynth(audioSessionId);
       } else {
         const ids = Array.from(S.pendingResynthSet);
         S.pendingResynthSet.clear();
-        for (const id of ids) await doPartialResynth(id);
+        for (const id of ids) {
+          if (audioSessionId !== S.audioSessionId) break;
+          await doPartialResynth(id, audioSessionId);
+        }
       }
+      if (audioSessionId !== S.audioSessionId) return;
       // Keep rendered PCM authoritative; WebAudio AudioBuffer is a second
       // full-size PCM copy, so materialize it lazily on iPhone/mobile.
       S.editedBuffer = null;
@@ -1960,11 +2042,21 @@
       }
       S.previewSegId = null;
     } catch (err) {
+      // A render from a replaced audio session is obsolete; suppress its
+      // late error so it cannot confuse the user after the new song loaded.
+      if (audioSessionId !== S.audioSessionId) return;
       console.error(err);
       toastMsg('再合成でエラーが発生しました');
     } finally {
       S.resynthBusy = false;
-      if (S.resynthQueued) { S.resynthQueued = false; runPendingResynth(); }
+      if (S.resynthQueued) {
+        S.resynthQueued = false;
+        // Avoid an unhandled rejection from the fire-and-forget follow-up.
+        runPendingResynth().catch((err) => {
+          console.error(err);
+          toastMsg('再合成でエラーが発生しました');
+        });
+      }
     }
   }
 
@@ -1977,7 +2069,7 @@
     };
   }
 
-  async function doFullResynth() {
+  async function doFullResynth(audioSessionId = S.audioSessionId) {
     const renderT0 = performance.now();
     const segsPlain = S.segments.map(segmentToPlain);
     let res;
@@ -2000,6 +2092,7 @@
       );
     }
 
+    if (audioSessionId !== S.audioSessionId) return;
     S.editedChannels = res.channels;
     console.info(`[PitchEditor] full resynthesis ${(performance.now() - renderT0).toFixed(0)} ms (${IS_IOS ? 'iOS chunked memory-first' : 'worker'})`);
   }
@@ -2067,16 +2160,17 @@
     return { regionStartSample, regionEndSample, localChannels, localPitchTrack, localSegments };
   }
 
-  async function doPartialResynth(segId) {
+  async function doPartialResynth(segId, audioSessionId = S.audioSessionId) {
     const partialT0 = performance.now();
     const region = buildLocalRegion(segId);
-    if (!region) { await doFullResynth(); return; } // safety net -- fall back rather than skip the edit
+    if (!region) { await doFullResynth(audioSessionId); return; } // safety net -- fall back rather than skip the edit
     const { regionStartSample, regionEndSample, localChannels, localPitchTrack, localSegments } = region;
     const localN = regionEndSample - regionStartSample;
     const res = await workerCall(
       { type: 'resynth', preferMainThread: true, channels: localChannels, sr: S.sr, pitchTrack: localPitchTrack, segments: localSegments },
       localChannels.map((c) => c.buffer)
     );
+    if (audioSessionId !== S.audioSessionId || !S.editedChannels) return;
     res.channels.forEach((ch, c) => {
       if (S.editedChannels[c]) S.editedChannels[c].set(ch.subarray(0, localN), regionStartSample);
     });
@@ -2183,6 +2277,18 @@
   // ============================================================
   // Export
   // ============================================================
+  function downloadBlob(blob, outName) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = outName;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+
   $('exportBtn').addEventListener('click', async () => {
     const btn = $('exportBtn');
     btn.disabled = true;
@@ -2206,19 +2312,17 @@
           if (shareErr && shareErr.name === 'AbortError') {
             toastMsg('共有をキャンセルしました');
           } else {
-            throw shareErr;
+            // Long resynthesis/encoding can outlive Safari's transient user
+            // activation and make Web Share reject even though canShare()
+            // succeeded. The already-created WAV is still valid, so fall
+            // back to a normal download instead of losing the export.
+            console.warn('Native share unavailable after export; falling back to download', shareErr);
+            downloadBlob(blob, outName);
+            toastMsg('書き出しました');
           }
         }
       } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = outName;
-        a.rel = 'noopener';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 30000);
+        downloadBlob(blob, outName);
         toastMsg('書き出しました');
       }
     } catch (err) {
