@@ -1543,7 +1543,7 @@
             mode: 'pan', startX: px, startY: py,
             startView: originView,
             startMinMidi: S.minMidi, startMaxMidi: S.maxMidi,
-            originView, originMinMidi: S.minMidi, originMaxMidi: S.maxMidi
+            originView: startView, originMinMidi: S.minMidi, originMaxMidi: S.maxMidi
           };
           render();
           return;

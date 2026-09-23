@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v46 horizontal pan cancellation verification
+
+Horizontal swipes that begin on a note now keep both the finger-anchored pan origin and the original viewport. Cancelling the gesture restores the original view. Compact iPhone E2E verifies visibility and page-hide rollback and orientation canvas recovery.
+
 ## v45 cancelled horizontal pan recovery
 
 Cancelling a horizontal swipe that begins on a note now restores the original viewport, including when iOS interrupts the gesture during rotation, backgrounding, or page teardown. The compact mobile E2E exercises all three interruption paths. The Service Worker cache is v45.

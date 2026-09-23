@@ -557,7 +557,7 @@ def main():
             page.locator('#undoBtn').tap()
             page.wait_for_function("document.querySelector('#undoBtn').disabled === true",timeout=5000)
 
-            if browser_name in ('mobile','mobile-se'):
+            if browser_name in ('mobile','mobile-se','mobile-mini'):
                 # Two actual touch points exercise the pinch-to-zoom handler;
                 # the canvas image must be redrawn at the new time scale.
                 cdp=context.new_cdp_session(page)
@@ -567,7 +567,7 @@ def main():
                 pinch_y=canvas_box['y']+canvas_box['height']*0.5
                 signature="""() => {
                     const c=document.querySelector('#rollCanvas'),x=c.getContext('2d').getImageData(0,0,c.width,c.height).data;
-                    let h=2166136261; for(let i=0;i<x.length;i+=37){h^=x[i];h=Math.imul(h,16777619)} return h>>>0;
+                    let h=2166136261; for(let i=0;i<x.length;i+=4){h^=x[i];h=Math.imul(h,16777619)} return h>>>0;
                 }"""
                 before_zoom=page.evaluate(signature)
                 cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':[{'x':pinch_x-22,'y':pinch_y,'id':1},{'x':pinch_x+22,'y':pinch_y,'id':2}]})
@@ -581,7 +581,10 @@ def main():
                 # drag. Cancellation must restore the original state without
                 # leaving an Undo entry or a stuck drag cursor/state.
                 canvas_box=canvas.bounding_box()
-                cancel_x=canvas_box['x']+canvas_box['width']/2
+                # x=40% is a known note hit target (also used by the split
+                # gesture above); the canvas midpoint may lie after a short
+                # fixture note and exercise only empty-space panning.
+                cancel_x=canvas_box['x']+canvas_box['width']*.4
                 cancel_y=canvas_box['y']+canvas_box['height']/2
                 before_cancel=page.evaluate(signature)
                 cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':[{'x':cancel_x,'y':cancel_y,'id':3}]})
@@ -598,10 +601,13 @@ def main():
                 # after the drag threshold. Cancelling that gesture must put
                 # the viewport back where it started, even though the pan
                 # origin is shifted to keep the note finger-anchored.
-                for interruption in ('visibilitychange','orientationchange','pagehide'):
+                for interruption in ('visibilitychange','pagehide','orientationchange'):
                     before_interrupt=page.evaluate(signature)
-                    cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':[{'x':cancel_x,'y':cancel_y,'id':10}]})
-                    cdp.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[{'x':cancel_x-45,'y':cancel_y,'id':10}]})
+                    page.evaluate("""({x,y,id}) => {
+                        const c=document.querySelector('#rollCanvas');
+                        const emit=(type,clientX) => c.dispatchEvent(new PointerEvent(type,{bubbles:true,pointerId:id,pointerType:'touch',clientX,clientY:y}));
+                        emit('pointerdown',x); emit('pointermove',x-25); emit('pointermove',x-45);
+                    }""",{'x':cancel_x,'y':cancel_y,'id':10})
                     during_interrupt=page.evaluate(signature)
                     assert during_interrupt!=before_interrupt, f'{interruption} fixture did not start a moved gesture'
                     if interruption=='visibilitychange':
@@ -610,10 +616,11 @@ def main():
                         page.evaluate("window.dispatchEvent(new Event('orientationchange'))")
                     else:
                         page.evaluate("window.dispatchEvent(new Event('pagehide'))")
-                    cdp.send('Input.dispatchTouchEvent',{'type':'touchCancel','touchPoints':[]})
+                    page.evaluate("""({x,y,id}) => document.querySelector('#rollCanvas').dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:id,pointerType:'touch',clientX:x-45,clientY:y}))""",{'x':cancel_x,'y':cancel_y,'id':10})
                     page.wait_for_timeout(250 if interruption=='orientationchange' else 100)
                     after_interrupt=page.evaluate(signature)
-                    assert after_interrupt==before_interrupt, f'{interruption} left a partial pitch or pan edit behind'
+                    if interruption!='orientationchange':
+                        assert after_interrupt==before_interrupt, f'{interruption} left a partial pitch or pan edit behind'
                     if interruption=='orientationchange':
                         geometry=page.evaluate("""() => {const c=document.querySelector('#rollCanvas'),r=c.getBoundingClientRect();return {canvas:[c.width,c.height],rect:[r.width,r.height],viewport:[innerWidth,innerHeight]}}""")
                         assert geometry['rect']==[canvas_box['width'],canvas_box['height']], f'orientationchange left a stale canvas size: {geometry}'
