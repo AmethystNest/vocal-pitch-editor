@@ -1,8 +1,8 @@
 # Vocal Pitch Editor
 
-## v32 iPhone accessibility and audio-memory preflight
+## v33 iPhone accessibility and PWA support
 
-PCM/float WAV files, including standard WAVE_FORMAT_EXTENSIBLE PCM/float subformats, are inspected from their RIFF header before full-file decoding. On iPhone, vocal and reference imports are checked against the combined estimated working set before calling `decodeAudioData`; rejected references leave the current vocal session intact. Compressed or unknown WAV subformats continue through Web Audio decoding and are checked against the actual decoded buffer. VoiceOver users can select adjacent detected notes with accessible previous/next controls; keyboard focus reveals those controls visually, the pitch canvas is linked to live pitch details, and recoverable failures use assertive announcements. The Service Worker cache is v32.
+PCM/float WAV files, including standard WAVE_FORMAT_EXTENSIBLE PCM/float subformats, are inspected from their RIFF header before full-file decoding. On iPhone, vocal and reference imports are checked against the combined estimated working set before calling `decodeAudioData`; rejected references leave the current vocal session intact. Compressed or unknown WAV subformats continue through Web Audio decoding and are checked against the actual decoded buffer. VoiceOver users can select adjacent detected notes with accessible previous/next controls; keyboard focus reveals those controls visually, the pitch canvas is linked to live pitch details, and recoverable failures use assertive announcements. Browser page zoom remains available, and the PWA shell, standalone manifest, matching launch colors, and iOS home-screen icon are covered by browser checks. The Service Worker cache is v33.
 
 `BROWSER=mobile-mini` exercises a 320×568 touch viewport, verifies oversized vocal and combined vocal/reference WAV preflights make zero decode calls, then loads, edits, plays, and exports a normal WAV.
 

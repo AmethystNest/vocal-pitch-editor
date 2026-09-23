@@ -200,6 +200,23 @@ def main():
         page.on('pageerror',lambda e:errors.append(str(e)))
         page.on('console',lambda m: console_errors.append(m.text) if m.type=='error' else None)
         page.goto(url,wait_until='load',timeout=30000)
+        pwa_state=page.evaluate("""async () => {
+            const viewport=document.querySelector('meta[name="viewport"]')?.content || '';
+            const manifestUrl=document.querySelector('link[rel="manifest"]')?.href;
+            const manifestResponse=manifestUrl && await fetch(manifestUrl);
+            const manifest=manifestResponse?.ok ? await manifestResponse.json() : null;
+            const icons=manifest ? await Promise.all(manifest.icons.map(async icon => ({
+                src:icon.src,sizes:icon.sizes,ok:(await fetch(new URL(icon.src,manifestUrl))).ok
+            }))) : [];
+            const appleIcon=document.querySelector('link[rel="apple-touch-icon"]')?.href;
+            return {viewport,themeColor:document.querySelector('meta[name="theme-color"]')?.content,manifestOk:!!manifest,manifest,icons,appleIconOk:appleIcon ? (await fetch(appleIcon)).ok : false};
+        }""")
+        assert 'user-scalable=no' not in pwa_state['viewport'] and 'maximum-scale=1' not in pwa_state['viewport'], f'page zoom is restricted on mobile: {pwa_state["viewport"]}'
+        assert pwa_state['manifestOk'], f'PWA manifest is missing or invalid: {pwa_state}'
+        assert pwa_state['manifest'].get('display')=='standalone' and pwa_state['manifest'].get('start_url')=='./' and pwa_state['manifest'].get('scope')=='./', f'PWA install settings are incorrect: {pwa_state["manifest"]}'
+        assert pwa_state['manifest'].get('name')=='ボーカルピッチエディタ' and pwa_state['manifest'].get('background_color')==pwa_state['themeColor']==pwa_state['manifest'].get('theme_color'), f'PWA launch appearance is inconsistent: {pwa_state}'
+        assert len(pwa_state['icons'])>=2 and all(icon['ok'] for icon in pwa_state['icons']), f'PWA icons are missing: {pwa_state["icons"]}'
+        assert pwa_state['appleIconOk'], 'iOS home-screen icon is missing'
         if browser_name=='webkit':
             webkit_state=page.evaluate("""() => ({
                 title:document.title,
