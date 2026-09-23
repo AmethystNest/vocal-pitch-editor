@@ -185,6 +185,10 @@
       background: rgba(30,33,42,.985); backdrop-filter: blur(10px);
       box-shadow: 0 -8px 28px rgba(0,0,0,.34);
     }
+    #editorScreen.a11y-note-nav-focused #inspector {
+      bottom: calc(max(8px, env(safe-area-inset-bottom)) + 78px);
+      max-height: calc(100dvh - 186px - env(safe-area-inset-bottom));
+    }
     #inspector .head { margin-bottom: 4px; }
     #inspector .noteName { font-size: 17px; }
     #inspector .offsetLine { margin-bottom: 8px; }
