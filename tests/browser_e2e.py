@@ -1,6 +1,7 @@
 """Real browser smoke test: file upload -> analysis -> WAV export.
 Set BROWSER=webkit for Safari-engine coverage, BROWSER=mobile for an iPhone-sized
-touch run, BROWSER=mobile-se for a compact iPhone viewport, BROWSER=mobile-long
+touch run, BROWSER=mobile-se for a compact iPhone viewport, BROWSER=mobile-mini
+for a 320px-wide mobile viewport, BROWSER=mobile-long
 to exercise long-file memory handling, or BROWSER=pwa-offline to verify offline use.
 BROWSER=mobile-share-fallback and BROWSER=mobile-share-cancel simulate iOS share-sheet outcomes.
 BROWSER=mobile-mp3 and BROWSER=mobile-m4a cover compressed formats; these modes require FFmpeg.
@@ -68,7 +69,7 @@ def tone(path,rate=24000,seconds=1.4,hz=220):
 def main():
     browser_name=os.environ.get('BROWSER','chromium').lower()
     with TemporaryDirectory() as temp,serve(https=browser_name=='pwa-offline') as url,sync_playwright() as pw:
-        mobile_modes=('mobile','mobile-se','mobile-long','mobile-cycle','mobile-share-fallback','mobile-share-cancel','mobile-mp3','mobile-m4a')
+        mobile_modes=('mobile','mobile-se','mobile-mini','mobile-long','mobile-cycle','mobile-share-fallback','mobile-share-cancel','mobile-mp3','mobile-m4a')
         mobile_share_modes=('mobile-share-fallback','mobile-share-cancel')
         expected_seconds=75.2 if browser_name=='mobile-long' else 1.4
         wav=Path(temp)/'tone.wav';tone(wav,seconds=expected_seconds)
@@ -115,8 +116,10 @@ def main():
             # Chromium supplies working Web Audio on this host while the iPhone
             # user agent exercises the app's iOS memory-first code paths.
             context_args.update(
-                viewport={'width':375,'height':667} if browser_name=='mobile-se' else {'width':390,'height':844},
-                device_scale_factor=2 if browser_name=='mobile-se' else 3,
+                viewport=({'width':375,'height':667} if browser_name=='mobile-se' else
+                          {'width':320,'height':568} if browser_name=='mobile-mini' else
+                          {'width':390,'height':844}),
+                device_scale_factor=2 if browser_name in ('mobile-se','mobile-mini') else 3,
                 is_mobile=True,
                 has_touch=True,
                 user_agent=(
@@ -200,7 +203,9 @@ def main():
                     return r.width>0 && r.left>=0 && r.right<=innerWidth;
                 })
             })""")
-            expected_viewport=(375,667) if browser_name=='mobile-se' else (390,844)
+            expected_viewport=((375,667) if browser_name=='mobile-se' else
+                               (320,568) if browser_name=='mobile-mini' else
+                               (390,844))
             assert (metrics['width'],metrics['height'])==expected_viewport, f'mobile viewport mismatch: {metrics}'
             assert metrics['documentWidth']<=metrics['width'], f'horizontal overflow on mobile: {metrics}'
             assert metrics['touchPoints']>0, f'touch input unavailable: {metrics}'
@@ -409,7 +414,7 @@ def main():
         if browser_name in mobile_modes: page.locator('#playBtn').tap()
         else: page.locator('#playBtn').click()
         page.wait_for_function("document.querySelector('#playBtn').textContent.includes('再生')",timeout=10000)
-        if browser_name in ('mobile','mobile-se'):
+        if browser_name in ('mobile','mobile-se','mobile-mini'):
             page.set_viewport_size({'width':844,'height':390})
             page.wait_for_function("document.querySelector('#rollCanvas').clientWidth > 500",timeout=5000)
             page.wait_for_timeout(250)
