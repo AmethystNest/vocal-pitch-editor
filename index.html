@@ -267,8 +267,8 @@
 <body>
 <div id="app">
 
-  <input type="file" id="fileInput" accept=".wav,.mp3,.m4a,.aac,audio/wav,audio/x-wav,audio/mpeg,audio/mp4,audio/aac">
-  <input type="file" id="refFileInput" accept=".wav,.mp3,.m4a,.aac,audio/wav,audio/x-wav,audio/mpeg,audio/mp4,audio/aac">
+  <input type="file" id="fileInput" aria-label="ボーカル音源ファイル" accept=".wav,.mp3,.m4a,.aac,audio/wav,audio/x-wav,audio/mpeg,audio/mp4,audio/aac">
+  <input type="file" id="refFileInput" aria-label="お手本音源ファイル" accept=".wav,.mp3,.m4a,.aac,audio/wav,audio/x-wav,audio/mpeg,audio/mp4,audio/aac">
 
   <div id="loadingScreen">
     <div class="spinner"></div>
@@ -277,7 +277,7 @@
 
   <div id="editorScreen">
     <div id="topbar">
-      <button class="iconBtn" id="backBtn" title="音声ファイルを開く">📁<span class="toolLabel">音源</span></button>
+      <button class="iconBtn" id="backBtn" title="ボーカル音源を選択" aria-label="ボーカル音源を選択">📁<span class="toolLabel">音源</span></button>
       <button class="iconBtn" id="fullscreenBtn" title="Androidで全画面表示" hidden>⛶<span class="toolLabel">全画面</span></button>
       <button class="iconBtn accent" id="playBtn" title="再生/一時停止" disabled>▶<span class="toolLabel">再生</span></button>
       <button class="iconBtn" id="undoBtn" title="1つ前の編集に戻る（最大10回）" disabled>↶<span class="toolLabel">戻る</span></button>
@@ -309,7 +309,7 @@
           <div id="emptyUploadIcon">🎙️</div>
           <div id="emptyUploadTitle">ボーカル音源を読み込む</div>
           <div id="emptyUploadText">ピッチを解析して、ノートを直接動かして補正できます。<br>WAV / MP3 / M4A / AAC 対応</div>
-          <button id="emptyUploadBtn" type="button">ファイルを選択</button>
+          <button id="emptyUploadBtn" type="button" aria-label="ボーカル音源を選択">ファイルを選択</button>
           <div id="emptyUploadHint">音源は端末内で処理されます</div>
         </div>
       </div>

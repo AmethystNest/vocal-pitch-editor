@@ -273,10 +273,20 @@ def main():
             assert metrics['documentWidth']<=metrics['width'], f'horizontal overflow on mobile: {metrics}'
             assert metrics['touchPoints']>0, f'touch input unavailable: {metrics}'
             assert metrics['essentialButtonsVisible'], f'essential mobile controls are not visible: {metrics}'
+            assert page.locator('#backBtn').is_enabled() and page.locator('#backBtn').get_attribute('aria-label')=='ボーカル音源を選択', 'initial audio picker is not clearly accessible'
+            unavailable_controls=page.locator('#topbar button:not(#backBtn)').evaluate_all("els => els.filter(el => el.getAttribute('tabindex') !== '-1').map(el => el.id)")
+            assert not unavailable_controls, f'editor-only controls remain in initial keyboard/VoiceOver order: {unavailable_controls}'
+            assert page.locator('#emptyUploadBtn').get_attribute('aria-label')=='ボーカル音源を選択', 'empty-state picker has no descriptive accessible name'
+            page.evaluate('document.activeElement.blur()')
+            page.keyboard.press('Tab')
+            assert page.evaluate('document.activeElement.id')=='backBtn', 'keyboard focus did not start at the audio picker'
+            page.keyboard.press('Tab')
+            assert page.evaluate('document.activeElement.id')=='emptyUploadBtn', 'empty-state file picker is not the next keyboard action'
+            assert page.locator('#rollCanvas').get_attribute('tabindex')=='-1', 'empty pitch canvas is reachable before a track is loaded'
             unnamed_buttons=page.locator('#topbar button:not([aria-label])').evaluate_all("els => els.filter(el => !(el.getAttribute('title') || el.querySelector('.toolLabel')?.textContent?.trim())).map(el => el.id)")
             assert not unnamed_buttons, f'mobile toolbar has unnamed buttons: {unnamed_buttons}'
             assert page.locator('#interactionGuide').get_attribute('aria-live')=='polite', 'interaction guide is not announced'
-            assert page.locator('#rollCanvas').get_attribute('tabindex')=='0', 'pitch canvas is not keyboard focusable'
+            assert page.locator('#rollCanvas').get_attribute('tabindex')=='-1', 'empty pitch canvas should not be in the keyboard focus order'
             assert page.locator('#rollCanvas').get_attribute('aria-describedby')=='a11yStatus', 'pitch canvas is not linked to live pitch details'
             assert page.locator('#inspClose').get_attribute('aria-label')=='選択ノートの詳細を閉じる', 'inspector close button has no descriptive accessible name'
             assert page.locator('#accessibleNoteNav').get_attribute('hidden') is not None, 'note navigation is exposed before analysis'
@@ -296,12 +306,15 @@ def main():
                 loading:document.querySelector('#loadingScreen').style.display,
                 uploadVisible:!document.querySelector('#emptyUpload').classList.contains('hidden'),
                 disabled:document.querySelector('#exportBtn').disabled,
+                pickerAvailable:!document.querySelector('#backBtn').disabled,
+                canvasTabIndex:document.querySelector('#rollCanvas').tabIndex,
                 fileName:document.querySelector('#fileNameLabel').textContent,
                 decodeCalls:window.__testDecodeAudioCalls
             })""")
             assert 'iPhone' in guard_state['toast'] and 'WAV' in guard_state['toast'], f'oversized WAV was not rejected before decode: {guard_state}'
             assert page.locator('#toast').get_attribute('role')=='alert' and page.locator('#toast').get_attribute('aria-live')=='assertive', 'audio import failure is not announced assertively'
             assert guard_state['uploadVisible'] and guard_state['disabled'] and not guard_state['fileName'], f'failed WAV import did not return to a clean upload state: {guard_state}'
+            assert guard_state['pickerAvailable'] and guard_state['canvasTabIndex']==-1, f'failed WAV import left an inaccessible recovery state: {guard_state}'
             assert guard_state['decodeCalls']==0, f'oversized WAV reached decodeAudioData: {guard_state}'
             assert len(console_errors)==1 and 'decodeAudioFile' in console_errors[0], f'oversized WAV rejection did not report one expected import error: {console_errors}'
             console_errors.clear()
@@ -339,6 +352,10 @@ def main():
                 f'analysis timeout: state={state}; pageErrors={errors}; consoleErrors={console_errors}'
             )
         assert audio_file.name in page.locator('#fileNameLabel').inner_text()
+        if browser_name in mobile_modes:
+            assert page.locator('#modeLineBtn').get_attribute('tabindex') is None, 'editor controls did not return to the VoiceOver/keyboard order after analysis'
+            assert page.locator('#backBtn').is_enabled(), 'audio picker became unavailable after analysis'
+            assert page.locator('#rollCanvas').get_attribute('tabindex')=='0', 'analyzed pitch canvas is not keyboard reachable'
         if browser_name in mobile_modes:
             assert page.locator('#fileInput').evaluate('(input) => input.value') == '', 'main file picker value was not cleared after selection'
         assert not errors, f'JS errors: {errors}'

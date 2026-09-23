@@ -130,6 +130,13 @@
   const guideMode = $('guideMode');
   const guideText = $('guideText');
 
+  // Keep unavailable editor actions out of the VoiceOver focus order before
+  // there is a track to edit. The file picker remains available for recovery.
+  $('backBtn').setAttribute('aria-label', 'ボーカル音源を選択');
+  $('emptyUploadBtn').setAttribute('aria-label', 'ボーカル音源を選択');
+  $('fileInput').setAttribute('aria-label', 'ボーカル音源ファイル');
+  $('refFileInput').setAttribute('aria-label', 'お手本音源ファイル');
+
   function updateInteractionGuide() {
     if (!guideMode || !guideText || typeof S === 'undefined') return;
     if (S.splitArmed) {
@@ -615,10 +622,23 @@
   }
 
   function setControlsEnabled(enabled) {
+    canvas.tabIndex = enabled ? 0 : -1;
     ['playBtn', 'zoomOutBtn', 'zoomInBtn', 'fitAllBtn', 'splitBtn', 'resetAllBtn', 'autoCorrectBtn', 'exportBtn', 'refBtn'].forEach((id) => {
       $(id).disabled = !enabled;
     });
+    $('backBtn').disabled = false;
+    // Undo, mode changes and edit-only controls have no action until analysis
+    // succeeds. Hide them from sequential assistive-technology navigation too.
+    $('undoBtn').disabled = !enabled || S.undoStack.length === 0;
+    ['undoBtn', 'fullscreenBtn', 'modeNoteBtn', 'modeLineBtn', 'autoPreviewBtn', 'resetAllBtn', 'autoCorrectBtn', 'refBtn', 'refPlayBtn', 'splitBtn', 'applyAllBtn', 'zoomOutBtn', 'zoomInBtn', 'fitAllBtn', 'exportBtn', 'playBtn'].forEach((id) => {
+      const control = $(id);
+      if (!control) return;
+      if (!enabled) control.setAttribute('tabindex', '-1');
+      else control.removeAttribute('tabindex');
+    });
   }
+
+  setControlsEnabled(false);
 
   function openAudioPicker(input) {
     // iOS/Safari: explicit extensions steer the chooser toward Files instead of Photos/video.
