@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v41 mobile assistive-controls layout
+
+When keyboard or VoiceOver note-navigation controls receive focus, the mobile note inspector reserves space for the fixed navigation bar so pitch controls remain reachable. The Service Worker cache is v41.
+
 ## v40 accessible note position
 
 VoiceOver and keyboard note navigation announce the selected note's position in the analyzed sequence. The Service Worker cache is v40 so installed browsers refresh the updated app shell and audio editor code.
