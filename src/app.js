@@ -1456,6 +1456,30 @@
     }
   });
 
+  function cancelPointer(e) {
+    if (e.pointerId !== activePointerId) return;
+    activePointerId = null;
+    if (S.dragging && S.dragging.undoSnapshot) {
+      const snapshot = S.dragging.undoSnapshot;
+      S.segments = snapshot.segments.map(cloneSegmentForHistory);
+      S.segments.forEach((seg, index) => { seg.id = index; });
+      S.selectedSegId = snapshot.selectedSegId;
+      hideInspector();
+      updateInspector();
+      updateUndoBtn();
+    }
+    if (S.panning && S.panning.mode === 'pan') {
+      S.viewStartSec = S.panning.startView;
+      S.minMidi = S.panning.startMinMidi;
+      S.maxMidi = S.panning.startMaxMidi;
+    } else if (S.panning && S.panning.mode === 'seek') {
+      seekTo(S.playStartOffsetSec);
+    }
+    S.dragging = null;
+    S.panning = null;
+    render();
+  }
+
   function endPointer(e) {
     if (e.pointerId !== activePointerId) return;
     activePointerId = null;
@@ -1478,7 +1502,7 @@
     S.panning = null;
   }
   canvas.addEventListener('pointerup', endPointer);
-  canvas.addEventListener('pointercancel', endPointer);
+  canvas.addEventListener('pointercancel', cancelPointer);
 
   // pinch-to-zoom (horizontal), anchored at the midpoint between the fingers.
   let pinchStartDist = null, pinchStartPxPerSec = null, pinchAnchorTime = null, pinchAnchorX = null;

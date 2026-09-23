@@ -273,6 +273,23 @@ def main():
                 after_zoom=page.evaluate(signature)
                 assert after_zoom!=before_zoom, 'two-finger pinch did not redraw the pitch canvas'
                 assert page.locator('#undoBtn').is_disabled(), 'pinch gesture leaked into a note edit'
+                # OS interruptions can cancel a touch after a partial note
+                # drag. Cancellation must restore the original state without
+                # leaving an Undo entry or a stuck drag cursor/state.
+                canvas_box=canvas.bounding_box()
+                cancel_x=canvas_box['x']+canvas_box['width']/2
+                cancel_y=canvas_box['y']+canvas_box['height']/2
+                before_cancel=page.evaluate(signature)
+                cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':[{'x':cancel_x,'y':cancel_y,'id':3}]})
+                cdp.send('Input.dispatchTouchEvent',{'type':'touchMove','touchPoints':[{'x':cancel_x,'y':cancel_y-45,'id':3}]})
+                during_cancel=page.evaluate(signature)
+                assert during_cancel!=before_cancel, 'touch interruption fixture did not move the canvas or note'
+                cdp.send('Input.dispatchTouchEvent',{'type':'touchCancel','touchPoints':[]})
+                page.wait_for_timeout(100)
+                assert page.locator('#undoBtn').is_disabled(), 'cancelled touch created an Undo entry'
+                after_cancel=page.evaluate(signature)
+                assert after_cancel==before_cancel, 'cancelled touch left a partial note or pan edit behind'
+                assert page.evaluate("!!document.querySelector('#rollCanvas').matches(':active')") is False, 'canvas remained active after cancelled touch'
         if browser_name=='mobile-long':
             assert 'iPhone省メモリ解析' in page.locator('#fileNameLabel').text_content(), 'long iPhone analysis did not select downsampled memory mode'
         final_expected_hz=220
