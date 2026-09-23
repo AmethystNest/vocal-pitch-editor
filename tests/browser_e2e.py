@@ -15,11 +15,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from threading import Thread
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.x509.oid import NameOID
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 ROOT=Path(__file__).resolve().parents[1]
 @contextmanager
@@ -34,6 +30,10 @@ def serve(https=False):
     if https:
         # Chromium accepts this test-only TLS endpoint; no certificate is
         # installed in or trusted by the host operating system.
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
         key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
         subject=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,'localhost')])
         cert=(x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
@@ -80,13 +80,18 @@ def main():
             browser=pw.chromium.launch(**launch_args)
         context_args=dict(accept_downloads=True,ignore_https_errors=browser_name=='pwa-offline')
         if browser_name=='webkit':
-            # Exercise the iPhone-specific memory/resynthesis path as well as
-            # WebKit itself. Playwright WebKit on Windows otherwise identifies
-            # as desktop Safari and skips the code guarded by IS_IOS.
-            context_args['user_agent']=(
-                'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) '
-                'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 '
-                'Mobile/15E148 Safari/604.1'
+            # Playwright's Windows WebKit shell is not iOS Safari, but still
+            # gives useful responsive-layout and API-availability coverage.
+            context_args.update(
+                viewport={'width':390,'height':844},
+                device_scale_factor=3,
+                is_mobile=True,
+                has_touch=True,
+                user_agent=(
+                    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) '
+                    'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 '
+                    'Mobile/15E148 Safari/604.1'
+                ),
             )
         elif browser_name in mobile_modes:
             # Chromium supplies working Web Audio on this host while the iPhone
@@ -109,6 +114,24 @@ def main():
         page.on('pageerror',lambda e:errors.append(str(e)))
         page.on('console',lambda m: console_errors.append(m.text) if m.type=='error' else None)
         page.goto(url,wait_until='load',timeout=30000)
+        if browser_name=='webkit':
+            webkit_state=page.evaluate("""() => ({
+                title:document.title,
+                viewport:[innerWidth,innerHeight],
+                pageWidth:document.documentElement.scrollWidth,
+                audioConstructor:!!(window.AudioContext||window.webkitAudioContext),
+                uploadVisible:getComputedStyle(document.querySelector('#emptyUploadCard')).display!=='none'
+            })""")
+            webkit_state['hasAudioContext']=bool(webkit_state.pop('audioConstructor'))
+            assert webkit_state['title']=='ボーカルピッチエディタ', f'WebKit app shell failed: {webkit_state}'
+            assert webkit_state['viewport']==[390,844], f'WebKit mobile viewport mismatch: {webkit_state}'
+            assert webkit_state['pageWidth']<=webkit_state['viewport'][0], f'WebKit horizontal overflow: {webkit_state}'
+            assert webkit_state['uploadVisible'], f'WebKit upload surface missing: {webkit_state}'
+            if not webkit_state['hasAudioContext']:
+                assert not errors, f'WebKit shell JS errors: {errors}'
+                print(f'browser-e2e: PARTIAL PASS (webkit mobile shell; Web Audio unavailable in this host: {webkit_state})')
+                browser.close()
+                return
         if browser_name=='pwa-offline':
             page.wait_for_function("navigator.serviceWorker?.controller !== null",timeout=15000)
             page.evaluate("navigator.serviceWorker.ready")

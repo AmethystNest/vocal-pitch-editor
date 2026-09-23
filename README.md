@@ -25,6 +25,8 @@ Windows + Playwright Chromiumで `npm run test:browser` 相当のE2Eを実行し
 
 `BROWSER=mobile-se` は375×667・DPR 2のコンパクト画面でタッチ編集と二本指ズームを検証する。`BROWSER=pwa-offline` は一時的な自己署名HTTPSサーバーでService Workerを登録し、オフライン再読込後の音源解析・再生・書き出しまで検証する。HTTPS試験にはPythonの`cryptography`パッケージが必要。どちらもChromiumによる自動テストで、iPhone実機Safariの最終確認は別途必要。
 
+`BROWSER=webkit` はPlaywright WebKitの390×844モバイルシェルと横はみ出しを検証する。Windows配布のPlaywright WebKitにWeb Audio APIがない環境では、音声処理を実行せず部分PASSとして明示する。この結果はiPhone Safari音声対応の判定には使えない。
+
 ## v22 iPhone/PWA reliability
 
 GitHub Pages向けの実ファイル配置を `src/` / `tests/` に統一。iPhoneの未読込キャンバスタップも共通のファイル選択経路を使う。Service Workerはv22キャッシュへ更新し、インストール後に即時activateできるようにして、ホーム画面PWAが旧v19 JavaScriptを保持し続ける問題を防ぐ。
