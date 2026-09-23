@@ -306,12 +306,12 @@
           <div id="emptyUploadHint">音源は端末内で処理されます</div>
         </div>
       </div>
-      <canvas id="rollCanvas" role="region" tabindex="0" aria-label="ピッチ編集ロール。左右矢印キーでノート選択、上下矢印キーで選択中ノートを半音変更。タップやドラッグでも編集できます。">
+      <canvas id="rollCanvas" role="region" tabindex="0" aria-describedby="a11yStatus" aria-label="ピッチ編集ロール。左右矢印キーでノート選択、上下矢印キーで選択中ノートを半音変更。タップやドラッグでも編集できます。">
         ピッチ編集ロール。左右矢印キーでノート選択、上下矢印キーで選択中ノートを半音変更します。
       </canvas>
       <div id="a11yStatus" class="srOnly" role="status" aria-live="polite" aria-atomic="true"></div>
       <div id="inspector">
-        <div class="head"><span class="noteName" id="inspNote">C4</span><button class="closeX" id="inspClose">×</button></div>
+        <div class="head"><span class="noteName" id="inspNote">C4</span><button class="closeX" id="inspClose" type="button" aria-label="選択ノートの詳細を閉じる">×</button></div>
         <div class="offsetLine" id="inspOffset">±0¢</div>
         <div class="pitchSummary">
           <div class="pitchStat"><span class="k">元の中心</span><span class="v" id="inspBefore">--</span></div>

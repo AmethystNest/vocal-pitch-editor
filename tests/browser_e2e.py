@@ -248,6 +248,8 @@ def main():
             assert not unnamed_buttons, f'mobile toolbar has unnamed buttons: {unnamed_buttons}'
             assert page.locator('#interactionGuide').get_attribute('aria-live')=='polite', 'interaction guide is not announced'
             assert page.locator('#rollCanvas').get_attribute('tabindex')=='0', 'pitch canvas is not keyboard focusable'
+            assert page.locator('#rollCanvas').get_attribute('aria-describedby')=='a11yStatus', 'pitch canvas is not linked to live pitch details'
+            assert page.locator('#inspClose').get_attribute('aria-label')=='選択ノートの詳細を閉じる', 'inspector close button has no descriptive accessible name'
             page.locator('#modeLineBtn').tap()
             assert page.locator('#modeLineBtn').get_attribute('aria-pressed')=='true', 'line tool state was not exposed'
             page.locator('#modeNoteBtn').tap()
@@ -266,6 +268,7 @@ def main():
                 decodeCalls:window.__testDecodeAudioCalls
             })""")
             assert 'iPhone' in guard_state['toast'] and 'WAV' in guard_state['toast'], f'oversized WAV was not rejected before decode: {guard_state}'
+            assert page.locator('#toast').get_attribute('role')=='alert' and page.locator('#toast').get_attribute('aria-live')=='assertive', 'audio import failure is not announced assertively'
             assert guard_state['uploadVisible'] and guard_state['disabled'] and not guard_state['fileName'], f'failed WAV import did not return to a clean upload state: {guard_state}'
             assert guard_state['decodeCalls']==0, f'oversized WAV reached decodeAudioData: {guard_state}'
             assert len(console_errors)==1 and 'decodeAudioFile' in console_errors[0], f'oversized WAV rejection did not report one expected import error: {console_errors}'
@@ -321,6 +324,7 @@ def main():
                     referenceDisabled:document.querySelector('#refPlayBtn').disabled
                 })""")
                 assert 'iPhone' in ref_guard['toast'] and 'WAV' in ref_guard['toast'], f'combined audio-memory preflight did not reject reference WAV: {ref_guard}'
+                assert page.locator('#toast').get_attribute('role')=='alert' and page.locator('#toast').get_attribute('aria-live')=='assertive', 'reference import failure is not announced assertively'
                 assert ref_guard['decodeCalls']==2, f'reference WAV reached decodeAudioData despite combined memory limit: {ref_guard}'
                 assert ref_guard['vocalStillLoaded'] and ref_guard['referenceDisabled'], f'reference preflight damaged the current vocal session: {ref_guard}'
                 assert len(console_errors)==1 and 'loadReference' in console_errors[0], f'reference memory guard did not report one expected error: {console_errors}'
@@ -340,6 +344,7 @@ def main():
             canvas.press('ArrowRight')
             page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
             assert page.locator('#a11yStatus').text_content().startswith('選択中 '), 'keyboard note selection was not announced'
+            assert page.locator('#rollCanvas').get_attribute('aria-describedby')=='a11yStatus', 'selected pitch description is disconnected from the focused canvas'
             keyboard_offset=page.locator('#inspOffset').inner_text()
             canvas.press('ArrowUp')
             page.wait_for_function("document.querySelector('#undoBtn').disabled === false",timeout=5000)
@@ -398,6 +403,7 @@ def main():
             page.wait_for_function("document.querySelector('#toast').style.display === 'block'",timeout=3000)
             split_message=page.locator('#toast').text_content()
             assert 'ノートを分割しました' in split_message, f'touch split failed: {split_message.encode("unicode_escape")}'
+            assert page.locator('#toast').get_attribute('role')=='status' and page.locator('#toast').get_attribute('aria-live')=='polite', 'successful edits did not restore polite status announcements'
             page.wait_for_function("document.querySelector('#undoBtn').disabled === false",timeout=5000)
             page.locator('#undoBtn').tap()
             page.wait_for_function("document.querySelector('#undoBtn').disabled === true",timeout=5000)

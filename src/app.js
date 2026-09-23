@@ -211,8 +211,10 @@
     analysisSampleRate: null,
   };
 
-  function toastMsg(text, ms) {
+  function toastMsg(text, ms, assertive = false) {
     toast.textContent = text;
+    toast.setAttribute('role', assertive ? 'alert' : 'status');
+    toast.setAttribute('aria-live', assertive ? 'assertive' : 'polite');
     toast.style.display = 'block';
     clearTimeout(toastMsg._t);
     toastMsg._t = setTimeout(() => { toast.style.display = 'none'; }, ms || 1600);
@@ -378,7 +380,7 @@
         else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
       }
     } catch (e) {
-      toastMsg('ブラウザの全画面表示を開始できませんでした', 2600);
+      toastMsg('ブラウザの全画面表示を開始できませんでした', 2600, true);
     }
     syncFullscreenButton();
   }
@@ -603,7 +605,7 @@
       $('emptyUpload').classList.remove('hidden');
       loadingScreen.style.display = 'none';
       const msg = (err && err.message) ? err.message : String(err);
-      toastMsg(`音声を読み込めませんでした。WAV / MP3 / M4A(AAC) を推奨します。${msg ? ' (' + msg + ')' : ''}`, 5000);
+      toastMsg(`音声を読み込めませんでした。WAV / MP3 / M4A(AAC) を推奨します。${msg ? ' (' + msg + ')' : ''}`, 5000, true);
       console.error(err);
     }
   }
@@ -625,7 +627,7 @@
     } catch (e) {
       try { input.click(); }
       catch (e2) {
-        toastMsg('Safariの「ファイル」から WAV / MP3 / M4A / AAC を選択してください。', 4000);
+        toastMsg('Safariの「ファイル」から WAV / MP3 / M4A / AAC を選択してください。', 4000, true);
       }
     }
   }
@@ -702,7 +704,7 @@
       if (audioSessionId !== S.audioSessionId) return;
       console.error(err);
       const detail = err && err.message ? ` (${err.message})` : '';
-      toastMsg(`リファレンスを読み込めませんでした。iPhoneでは WAV / MP3 / M4A(AAC) を推奨します。${detail}`, 5000);
+      toastMsg(`リファレンスを読み込めませんでした。iPhoneでは WAV / MP3 / M4A(AAC) を推奨します。${detail}`, 5000, true);
     } finally {
       // Do not let an obsolete reference request re-enable controls owned by
       // a newer main-audio session.
@@ -770,7 +772,7 @@
       try { await playReference(); }
       catch (err) {
         console.error(err);
-        toastMsg('Safariで参照音声を再生できませんでした。もう一度タップしてください。', 3500);
+        toastMsg('Safariで参照音声を再生できませんでした。もう一度タップしてください。', 3500, true);
       }
     }
   });
@@ -2266,7 +2268,7 @@
       // late error so it cannot confuse the user after the new song loaded.
       if (audioSessionId !== S.audioSessionId) return;
       console.error(err);
-      toastMsg('再合成でエラーが発生しました');
+      toastMsg('再合成でエラーが発生しました', 3000, true);
     } finally {
       S.resynthBusy = false;
       if (S.resynthQueued) {
@@ -2274,7 +2276,7 @@
         // Avoid an unhandled rejection from the fire-and-forget follow-up.
         runPendingResynth().catch((err) => {
           console.error(err);
-          toastMsg('再合成でエラーが発生しました');
+          toastMsg('再合成でエラーが発生しました', 3000, true);
         });
       }
     }
@@ -2491,7 +2493,7 @@
       try { await startPlayback(); }
       catch (err) {
         console.error(err);
-        toastMsg('Safariで音声再生を開始できませんでした。もう一度タップしてください。', 3500);
+        toastMsg('Safariで音声再生を開始できませんでした。もう一度タップしてください。', 3500, true);
       }
     }
   });
@@ -2550,7 +2552,7 @@
       }
     } catch (err) {
       console.error(err);
-      toastMsg('書き出しに失敗しました');
+      toastMsg('書き出しに失敗しました', 3500, true);
     } finally {
       btn.disabled = false;
       btn.textContent = prevLabel;
