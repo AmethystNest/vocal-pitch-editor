@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v48 compressed input-buffer peak
+
+The iPhone compressed-audio preflight now includes the source file's temporary ArrayBuffer in the peak working-set estimate while `decodeAudioData` is allocating decoded PCM. Compact E2E covers a near-limit M4A where decoded audio alone fits but the compressed input buffer would exceed the cap.
+
 ## v47 compressed-audio memory preflight
 
 Before decoding on iPhone, estimate the expanded working set of MP3 (Xing/frame sampling), M4A (movie header at the beginning or end), and AAC/ADTS (sampled frames). Oversized vocal files are rejected before `decodeAudioData`; an oversized reference file is rejected while preserving the loaded vocal. Compact iPhone E2E covers long synthetic headers for all three formats and verifies short real MP3/M4A/AAC still load. The Service Worker cache is v47.

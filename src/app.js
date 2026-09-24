@@ -426,9 +426,13 @@
 
   async function estimateCompressedAudioMemoryMB(file, outputSampleRate) {
     try {
-      return await estimateMP3MemoryMB(file, outputSampleRate) ??
+      const decodedWorkingSet = await estimateMP3MemoryMB(file, outputSampleRate) ??
         await estimateM4AMemoryMB(file, outputSampleRate) ??
         await estimateADTSMemoryMB(file, outputSampleRate);
+      if (decodedWorkingSet == null) return null;
+      // decodeAudioFile keeps the compressed ArrayBuffer live while Web Audio
+      // allocates the decoded AudioBuffer; include that transient peak too.
+      return decodedWorkingSet + file.size / (1024 * 1024);
     } catch (err) {
       console.warn('Could not estimate compressed audio duration before decoding', err);
       return null;

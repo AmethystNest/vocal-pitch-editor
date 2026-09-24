@@ -66,19 +66,30 @@ def tone(path,rate=24000,seconds=1.4,hz=220):
         samples=(int(0.25*32767*math.sin(2*math.pi*hz*i/rate)) for i in range(int(rate*seconds)))
         f.writeframes(b''.join(struct.pack('<h',s) for s in samples))
 
-def make_m4a_header(path,duration_sec,moov_at_end=False):
+def make_m4a_header(path,duration_sec,moov_at_end=False,padding_bytes=0):
     def atom(name,payload):return struct.pack('>I4s',len(payload)+8,name)+payload
     movie_header=bytearray(100)
     struct.pack_into('>I',movie_header,12,1000)  # mvhd timescale
     struct.pack_into('>I',movie_header,16,duration_sec*1000)
     ftyp=atom(b'ftyp',b'M4A \x00\x00\x00\x00isom')
     moov=atom(b'moov',atom(b'mvhd',movie_header))
+    if padding_bytes:
+        mdat_header=struct.pack('>I4s',padding_bytes+8,b'mdat')
+        prefix=ftyp+mdat_header if moov_at_end else ftyp+moov+mdat_header
+        with path.open('wb') as output:
+            output.write(prefix)
+            output.seek(padding_bytes-1,1);output.write(b'\x00')
+            if moov_at_end:output.write(moov)
+        return
     mdat=atom(b'mdat',bytes(64*1024))
     path.write_bytes(ftyp+(mdat+moov if moov_at_end else moov))
 
 def make_long_compressed_fixtures(folder):
     long_m4a=folder/'long-header.m4a';make_m4a_header(long_m4a,600)
     long_m4a_tail=folder/'long-header-tail.m4a';make_m4a_header(long_m4a_tail,600,moov_at_end=True)
+    # A 167-second file is just below the decoded-only cap on common 44.1/48k
+    # contexts; the 48 MiB compressed input buffer pushes the real peak over it.
+    compressed_peak=folder/'compressed-buffer-peak.m4a';make_m4a_header(compressed_peak,167,padding_bytes=48*1024*1024)
     # MPEG-1 Layer III, 44.1 kHz stereo, with a Xing frame count for ten minutes.
     mp3=bytearray(128);mp3[:4]=bytes((0xff,0xfb,0x90,0x64));mp3[36:40]=b'Xing'
     struct.pack_into('>II',mp3,40,1,23_000)
@@ -89,7 +100,7 @@ def make_long_compressed_fixtures(folder):
     # the iPhone working-set estimate while remaining a small test fixture.
     frame=bytearray(100);frame[:7]=bytes((0xff,0xf1,0x50,0x80,0x0c,0x9f,0xfc))
     long_aac=folder/'long-header.aac';long_aac.write_bytes(frame*10_000)
-    return long_m4a,long_m4a_tail,long_mp3,long_mp3_vbr,long_aac
+    return long_m4a,long_m4a_tail,compressed_peak,long_mp3,long_mp3_vbr,long_aac
 
 def tone_sequence(path,rate=24000,seconds=1.8,frequencies=(220,247,262)):
     frames=int(rate*seconds);segment_frames=frames//len(frequencies);phase=0.0
