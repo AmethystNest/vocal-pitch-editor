@@ -577,6 +577,14 @@ def main():
             mobile_targets=page.locator('#inspector .closeX, #inspector .inspActionBtn, #inspector .strengthPreset, #inspector .strengthRange, #inspector .rowBtns button, #inspector .resetBtn, #inspector .playSegBtn').evaluate_all("els => els.map(el => ({id:el.id || el.className, height:el.getBoundingClientRect().height, width:el.getBoundingClientRect().width}))")
             too_small=[target for target in mobile_targets if target['height']<43.5 or target['width']<43.5]
             assert not too_small, f'mobile pitch inspector has undersized touch targets: {too_small}'
+            if browser_name=='mobile-mini':
+                fine_layout=page.locator('#inspector .rowBtns button').evaluate_all("els => ({rows:new Set(els.map(el => Math.round(el.getBoundingClientRect().top))).size, widths:els.map(el => el.getBoundingClientRect().width)})")
+                assert fine_layout['rows']==2 and min(fine_layout['widths'])>=44, f'320px pitch fine controls do not use two usable rows: {fine_layout}'
+            fine_before=page.locator('#inspOffset').inner_text()
+            page.locator('#inspector .rowBtns button').nth(4).tap()
+            page.wait_for_function("document.querySelector('#inspOffset').textContent.includes('+10¢')",timeout=3000)
+            page.locator('#undoBtn').tap()
+            page.wait_for_function("(before) => document.querySelector('#inspOffset').textContent === before",arg=fine_before,timeout=5000)
             inspector_box=page.locator('#inspector').bounding_box()
             assert inspector_box and inspector_box['y']>=0 and inspector_box['y']+inspector_box['height']<=metrics['height'], f'mobile pitch inspector exceeds viewport: {inspector_box}'
             portrait_size={'width':metrics['width'],'height':metrics['height']}
