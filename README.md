@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v52 narrow-phone touch targets
+
+At viewport widths of 340px or less, six pitch fine-adjustment buttons wrap to two rows of three so each remains at least 44×44 CSS pixels. The 320×568 mobile E2E checks rendered touch-target dimensions and that the pitch panel stays within the viewport. The Service Worker cache is v52.
+
 ## v51 visible mobile toolbar chevrons
 
 Show a clear left or right chevron over the compact toolbar edge while more tools are off-screen. Mobile E2E checks the generated pseudo-element content and visible opacity at each end of a 320px viewport, so direction remains clear without shrinking touch targets. The Service Worker cache is v51.
