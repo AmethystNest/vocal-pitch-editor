@@ -121,7 +121,7 @@ def prepare_mobile_download(page):
 def main():
     browser_name=os.environ.get('BROWSER','chromium').lower()
     with TemporaryDirectory() as temp,serve(https=browser_name=='pwa-offline') as url,sync_playwright() as pw:
-        mobile_modes=('mobile','mobile-se','mobile-mini','mobile-long','mobile-cycle','mobile-share-fallback','mobile-share-cancel','mobile-share-success','mobile-mp3','mobile-m4a','mobile-aac')
+        mobile_modes=('mobile','mobile-se','mobile-mini','mobile-long','mobile-cycle','mobile-share-fallback','mobile-share-cancel','mobile-share-success','mobile-mp3','mobile-m4a','mobile-aac','webkit')
         mobile_share_modes=('mobile-share-fallback','mobile-share-cancel','mobile-share-success')
         expected_seconds=75.2 if browser_name=='mobile-long' else 1.4
         wav=Path(temp)/'tone.wav';tone(wav,seconds=expected_seconds)
@@ -208,6 +208,10 @@ def main():
             )
         context=browser.new_context(**context_args)
         page=context.new_page()
+        if browser_name=='webkit':
+            # Keep this E2E deterministic: WebKit's native share sheet is an
+            # OS surface, so exercise its fresh-gesture download fallback.
+            page.add_init_script("Object.defineProperty(navigator,'share',{value:undefined,configurable:true}); Object.defineProperty(navigator,'canShare',{value:undefined,configurable:true});")
         if browser_name in mobile_modes:
             page.add_init_script("""(() => {
                 const Native = window.AudioContext || window.webkitAudioContext;
