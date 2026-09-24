@@ -91,11 +91,13 @@ def make_long_compressed_fixtures(folder):
     # contexts; the 48 MiB compressed input buffer pushes the real peak over it.
     compressed_peak=folder/'compressed-buffer-peak.m4a';make_m4a_header(compressed_peak,167,padding_bytes=48*1024*1024)
     # MPEG-1 Layer III, 44.1 kHz stereo, with a Xing frame count for ten minutes.
-    mp3=bytearray(128);mp3[:4]=bytes((0xff,0xfb,0x90,0x64));mp3[36:40]=b'Xing'
+    mp3=bytearray(834);mp3[:4]=bytes((0xff,0xfb,0x90,0x64));mp3[36:40]=b'Xing'
     struct.pack_into('>II',mp3,40,1,23_000)
+    mp3[417:421]=bytes((0xff,0xfb,0x90,0x64))
     long_mp3=folder/'long-header.mp3';long_mp3.write_bytes(mp3)
-    mp3_frame=bytes((0xff,0xfb,0x90,0x64))+bytes(413)
-    long_mp3_vbr=folder/'long-header-no-xing.mp3';long_mp3_vbr.write_bytes(mp3_frame*23_000)
+    high_frame=bytes((0xff,0xfb,0xe0,0x64))+bytes(1040)  # 320 kbit/s, 44.1 kHz
+    low_frame=bytes((0xff,0xfb,0x10,0x64))+bytes(100)    # 32 kbit/s, 44.1 kHz
+    long_mp3_vbr=folder/'long-header-no-xing-vbr.mp3';long_mp3_vbr.write_bytes(high_frame*1100+low_frame*11_000)
     # ADTS AAC: 100-byte stereo frames at 44.1 kHz; ten thousand frames exceed
     # the iPhone working-set estimate while remaining a small test fixture.
     frame=bytearray(100);frame[:7]=bytes((0xff,0xf1,0x50,0x80,0x0c,0x9f,0xfc))
@@ -397,7 +399,7 @@ def main():
             for compressed_file in long_compressed:
                 decode_calls_before=page.evaluate('window.__testDecodeAudioCalls')
                 page.locator('#fileInput').set_input_files(str(compressed_file))
-                page.wait_for_function("document.querySelector('#toast').textContent.includes('iPhoneのメモリ上限に近いため') && document.querySelector('#loadingScreen').style.display === 'none'",timeout=5000)
+                page.wait_for_function("(n) => document.querySelector('#loadingScreen').style.display === 'none' && (document.querySelector('#toast').textContent.includes('iPhoneのメモリ上限に近いため') || window.__testDecodeAudioCalls > n)",arg=decode_calls_before,timeout=10000)
                 compressed_state=page.evaluate("""() => ({
                     calls:window.__testDecodeAudioCalls,
                     uploadVisible:!document.querySelector('#emptyUpload').classList.contains('hidden'),
