@@ -585,6 +585,8 @@ def main():
             page.wait_for_function("document.querySelector('#inspOffset').textContent.includes('+10¢')",timeout=3000)
             page.locator('#undoBtn').tap()
             page.wait_for_function("(before) => document.querySelector('#inspOffset').textContent === before",arg=fine_before,timeout=5000)
+            canvas.tap(position={'x':canvas_box['width']/2,'y':canvas_box['height']/2})
+            page.wait_for_function("document.querySelector('#inspector').classList.contains('show')",timeout=5000)
             inspector_box=page.locator('#inspector').bounding_box()
             assert inspector_box and inspector_box['y']>=0 and inspector_box['y']+inspector_box['height']<=metrics['height'], f'mobile pitch inspector exceeds viewport: {inspector_box}'
             portrait_size={'width':metrics['width'],'height':metrics['height']}
