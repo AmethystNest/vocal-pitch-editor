@@ -328,6 +328,9 @@ def main():
             assert metrics['documentWidth']<=metrics['width'], f'horizontal overflow on mobile: {metrics}'
             assert metrics['touchPoints']>0 or browser_name=='webkit', f'touch input unavailable: {metrics}'
             assert metrics['essentialButtonsVisible'], f'essential mobile controls are not visible: {metrics}'
+            toolbar_targets=page.locator('#topbar button').evaluate_all("els => els.map(el => ({id:el.id || el.getAttribute('aria-label'),width:el.getBoundingClientRect().width,height:el.getBoundingClientRect().height}))")
+            undersized_toolbar=[target for target in toolbar_targets if target['width']<43.5 or target['height']<43.5]
+            assert not undersized_toolbar, f'mobile toolbar has undersized touch targets: {undersized_toolbar}'
             page.wait_for_function("document.querySelector('#topbar').classList.contains('has-overflow-right')",timeout=3000)
             cues=page.locator('#topbar').evaluate("""el => ({
                 left:getComputedStyle(el,'::before').content,
