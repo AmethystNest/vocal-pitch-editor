@@ -60,6 +60,7 @@
   /* ---------- editor screen (shown from the start; canvas has its own empty-state prompt) ---------- */
   #editorScreen { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
   #topbar {
+    position: relative;
     display: flex; align-items: center; gap: 6px;
     padding: 6px 8px; background: var(--panel);
     border-bottom: 1px solid #2a2e38; flex: 0 0 auto;
@@ -67,6 +68,14 @@
     overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
   }
   #topbar::-webkit-scrollbar { display: none; }
+  #topbar::before, #topbar::after {
+    content: ''; position: sticky; align-self: stretch; z-index: 2; flex: 0 0 20px;
+    width: 20px; display: block; opacity: 0; pointer-events: none; transition: opacity .12s ease;
+  }
+  #topbar::before { left: 0; margin-right: -20px; background: linear-gradient(90deg, var(--panel), transparent); }
+  #topbar::after { right: 0; margin-left: -20px; background: linear-gradient(270deg, var(--panel), transparent); }
+  #topbar.has-overflow-left::before { opacity: 1; }
+  #topbar.has-overflow-right::after { opacity: 1; }
   #topbar > * { flex-shrink: 0; }
   .iconBtn {
     display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 2px;
