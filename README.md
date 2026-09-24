@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v47 compressed-audio memory preflight
+
+Before decoding on iPhone, estimate the expanded working set of MP3 (Xing/frame sampling), M4A (movie header at the beginning or end), and AAC/ADTS (sampled frames). Oversized vocal files are rejected before `decodeAudioData`; an oversized reference file is rejected while preserving the loaded vocal. Compact iPhone E2E covers long synthetic headers for all three formats and verifies short real MP3/M4A/AAC still load. The Service Worker cache is v47.
+
 ## v46 horizontal pan cancellation verification
 
 Horizontal swipes that begin on a note now keep both the finger-anchored pan origin and the original viewport. Cancelling the gesture restores the original view. Compact iPhone E2E verifies visibility and page-hide rollback and orientation canvas recovery.

@@ -66,6 +66,31 @@ def tone(path,rate=24000,seconds=1.4,hz=220):
         samples=(int(0.25*32767*math.sin(2*math.pi*hz*i/rate)) for i in range(int(rate*seconds)))
         f.writeframes(b''.join(struct.pack('<h',s) for s in samples))
 
+def make_m4a_header(path,duration_sec,moov_at_end=False):
+    def atom(name,payload):return struct.pack('>I4s',len(payload)+8,name)+payload
+    movie_header=bytearray(100)
+    struct.pack_into('>I',movie_header,12,1000)  # mvhd timescale
+    struct.pack_into('>I',movie_header,16,duration_sec*1000)
+    ftyp=atom(b'ftyp',b'M4A \x00\x00\x00\x00isom')
+    moov=atom(b'moov',atom(b'mvhd',movie_header))
+    mdat=atom(b'mdat',bytes(64*1024))
+    path.write_bytes(ftyp+(mdat+moov if moov_at_end else moov))
+
+def make_long_compressed_fixtures(folder):
+    long_m4a=folder/'long-header.m4a';make_m4a_header(long_m4a,600)
+    long_m4a_tail=folder/'long-header-tail.m4a';make_m4a_header(long_m4a_tail,600,moov_at_end=True)
+    # MPEG-1 Layer III, 44.1 kHz stereo, with a Xing frame count for ten minutes.
+    mp3=bytearray(128);mp3[:4]=bytes((0xff,0xfb,0x90,0x64));mp3[36:40]=b'Xing'
+    struct.pack_into('>II',mp3,40,1,23_000)
+    long_mp3=folder/'long-header.mp3';long_mp3.write_bytes(mp3)
+    mp3_frame=bytes((0xff,0xfb,0x90,0x64))+bytes(413)
+    long_mp3_vbr=folder/'long-header-no-xing.mp3';long_mp3_vbr.write_bytes(mp3_frame*23_000)
+    # ADTS AAC: 100-byte stereo frames at 44.1 kHz; ten thousand frames exceed
+    # the iPhone working-set estimate while remaining a small test fixture.
+    frame=bytearray(100);frame[:7]=bytes((0xff,0xf1,0x50,0x80,0x0c,0x9f,0xfc))
+    long_aac=folder/'long-header.aac';long_aac.write_bytes(frame*10_000)
+    return long_m4a,long_m4a_tail,long_mp3,long_mp3_vbr,long_aac
+
 def tone_sequence(path,rate=24000,seconds=1.8,frequencies=(220,247,262)):
     frames=int(rate*seconds);segment_frames=frames//len(frequencies);phase=0.0
     samples=[]
@@ -110,6 +135,7 @@ def main():
         struct.pack_into('<4sI4s4sIHHIIHH4sI',ref_header,0,
             b'RIFF',36+ref_bytes,b'WAVE',b'fmt ',16,1,2,48_000,192_000,4,16,b'data',ref_bytes)
         combined_oversized_wav.write_bytes(ref_header)
+        long_compressed=make_long_compressed_fixtures(Path(temp))
         audio_file=wav
         if browser_name in ('mobile-mp3','mobile-m4a','mobile-aac'):
             ffmpeg=os.environ.get('FFMPEG_PATH') or shutil.which('ffmpeg')
@@ -357,6 +383,20 @@ def main():
             assert unknown_state['uploadVisible'] and unknown_state['loading']=='none' and unknown_state['exportDisabled'], f'unsupported WAV did not fail cleanly through Web Audio: {unknown_state}'
             assert console_errors and any('EncodingError' in message for message in console_errors), f'unknown WAV was not sent to the Web Audio decoder: {console_errors}'
             console_errors.clear()
+            for compressed_file in long_compressed:
+                decode_calls_before=page.evaluate('window.__testDecodeAudioCalls')
+                page.locator('#fileInput').set_input_files(str(compressed_file))
+                page.wait_for_function("document.querySelector('#toast').textContent.includes('iPhoneのメモリ上限に近いため') && document.querySelector('#loadingScreen').style.display === 'none'",timeout=5000)
+                compressed_state=page.evaluate("""() => ({
+                    calls:window.__testDecodeAudioCalls,
+                    uploadVisible:!document.querySelector('#emptyUpload').classList.contains('hidden'),
+                    loading:document.querySelector('#loadingScreen').style.display,
+                    exportDisabled:document.querySelector('#exportBtn').disabled
+                })""")
+                assert compressed_state['calls']==decode_calls_before, f'long compressed audio reached decodeAudioData before the iPhone memory preflight: {compressed_file.suffix} {compressed_state}'
+                assert compressed_state['uploadVisible'] and compressed_state['loading']=='none' and compressed_state['exportDisabled'], f'long compressed audio rejection left a stale editor session: {compressed_file.suffix} {compressed_state}'
+                assert len(console_errors)==1 and 'decodeAudioFile' in console_errors[0], f'long compressed audio rejection was not reported: {compressed_file.suffix} {console_errors}'
+                console_errors.clear()
         page.locator('#fileInput').set_input_files(str(audio_file))
         try:
             page.wait_for_function("document.querySelector('#exportBtn').disabled === false",timeout=45000)
@@ -397,6 +437,17 @@ def main():
                 assert ref_guard['decodeCalls']==2, f'reference WAV reached decodeAudioData despite combined memory limit: {ref_guard}'
                 assert ref_guard['vocalStillLoaded'] and ref_guard['referenceDisabled'], f'reference preflight damaged the current vocal session: {ref_guard}'
                 assert len(console_errors)==1 and 'loadReference' in console_errors[0], f'reference memory guard did not report one expected error: {console_errors}'
+                console_errors.clear()
+                reference_decode_calls=page.evaluate('window.__testDecodeAudioCalls')
+                page.locator('#refFileInput').set_input_files(str(long_compressed[0]))
+                page.wait_for_function("document.querySelector('#toast').textContent.includes('iPhoneのメモリ上限に近いため')",timeout=5000)
+                compressed_ref=page.evaluate("""() => ({
+                    calls:window.__testDecodeAudioCalls,
+                    vocalLoaded:!document.querySelector('#exportBtn').disabled,
+                    referenceDisabled:document.querySelector('#refPlayBtn').disabled
+                })""")
+                assert compressed_ref['calls']==reference_decode_calls and compressed_ref['vocalLoaded'] and compressed_ref['referenceDisabled'], f'long compressed reference reached decoding or replaced the vocal session: {compressed_ref}'
+                assert len(console_errors)==1 and 'loadReference' in console_errors[0], f'long compressed reference rejection was not reported: {console_errors}'
                 console_errors.clear()
             reference_file=audio_file if browser_name in ('mobile-mp3','mobile-m4a','mobile-aac') else wav
             page.locator('#refFileInput').set_input_files(str(reference_file))

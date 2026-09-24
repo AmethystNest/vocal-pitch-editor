@@ -293,6 +293,148 @@
     return (decodedFrames * channels * 4 * 3 + decodedFrames * 8 * 3) / (1024 * 1024);
   }
 
+  function estimateDecodedMemoryMBForDuration(durationSec, outputSampleRate, channels = 2, safety = 1.15) {
+    if (!Number.isFinite(durationSec) || durationSec <= 0) return null;
+    const frames = Math.ceil(durationSec * Math.max(22050, outputSampleRate || 48000));
+    return (frames * channels * 4 * 3 + frames * 8 * 3) / (1024 * 1024) * safety;
+  }
+
+  async function estimateM4AMemoryMB(file, outputSampleRate) {
+    if (!/\.m4a$/i.test(file.name)) return null;
+    // Walk top-level ISO-BMFF atoms by offset so an mdat payload is never
+    // read into memory. The movie header is normally at the start or end.
+    for (let offset = 0, count = 0; offset + 8 <= file.size && count < 32; count++) {
+      const header = await file.slice(offset, Math.min(file.size, offset + 16)).arrayBuffer();
+      if (header.byteLength < 8) return null;
+      const view = new DataView(header);
+      let size = view.getUint32(0, false);
+      const type = String.fromCharCode(view.getUint8(4), view.getUint8(5), view.getUint8(6), view.getUint8(7));
+      let headerSize = 8;
+      if (size === 1) {
+        if (header.byteLength < 16) return null;
+        const largeSize = view.getBigUint64(8, false);
+        if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+        size = Number(largeSize);
+        headerSize = 16;
+      } else if (size === 0) size = file.size - offset;
+      if (size < headerSize || offset + size > file.size) return null;
+      if (type === 'moov') {
+        const bytes = new Uint8Array(await file.slice(offset, Math.min(offset + size, offset + 4 * 1024 * 1024)).arrayBuffer());
+        let mvhd = -1;
+        for (let i = 4; i + 24 <= bytes.length; i++) {
+          if (bytes[i] === 109 && bytes[i + 1] === 118 && bytes[i + 2] === 104 && bytes[i + 3] === 100) { mvhd = i; break; }
+        }
+        if (mvhd < 0) return null;
+        const movie = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const version = movie.getUint8(mvhd + 4);
+        const timescaleOffset = mvhd + (version === 1 ? 24 : 16);
+        const durationOffset = timescaleOffset + 4;
+        if (durationOffset + (version === 1 ? 8 : 4) > movie.byteLength) return null;
+        const timescale = movie.getUint32(timescaleOffset, false);
+        const duration = version === 1
+          ? Number(movie.getBigUint64(durationOffset, false))
+          : movie.getUint32(durationOffset, false);
+        if (!timescale || !Number.isFinite(duration)) return null;
+        return estimateDecodedMemoryMBForDuration(duration / timescale, outputSampleRate, 2);
+      }
+      offset += size;
+    }
+    return null;
+  }
+
+  async function estimateMP3MemoryMB(file, outputSampleRate) {
+    if (!/\.mp3$/i.test(file.name) || file.size < 4) return null;
+    const bytes = new Uint8Array(await file.slice(0, Math.min(file.size, 1024 * 1024)).arrayBuffer());
+    let start = 0;
+    if (bytes.length >= 10 && bytes[0] === 73 && bytes[1] === 68 && bytes[2] === 51) {
+      const tagSize = ((bytes[6] & 127) << 21) | ((bytes[7] & 127) << 14) | ((bytes[8] & 127) << 7) | (bytes[9] & 127);
+      start = 10 + tagSize + ((bytes[5] & 16) ? 10 : 0);
+    }
+    const mpeg1Rates = {1:[32,64,96,128,160,192,224,256,288,320,352,384,416,448],2:[32,48,56,64,80,96,112,128,160,192,224,256,320,384],3:[32,40,48,56,64,80,96,112,128,160,192,224,256,320]};
+    const mpeg2Rates = {1:[32,48,56,64,80,96,112,128,144,160,176,192,224,256],2:[8,16,24,32,40,48,56,64,80,96,112,128,144,160],3:[8,16,24,32,40,48,56,64,80,96,112,128,144,160]};
+    const baseRates = [44100,48000,32000];
+    function frameAt(offset) {
+      if (offset + 4 > bytes.length || bytes[offset] !== 255 || (bytes[offset + 1] & 224) !== 224) return null;
+      const version = (bytes[offset + 1] >> 3) & 3;
+      const layer = (bytes[offset + 1] >> 1) & 3;
+      const bitrateIndex = (bytes[offset + 2] >> 4) & 15;
+      const sampleIndex = (bytes[offset + 2] >> 2) & 3;
+      if (version === 1 || layer === 0 || bitrateIndex === 0 || bitrateIndex === 15 || sampleIndex === 3) return null;
+      const table = version === 3 ? mpeg1Rates : mpeg2Rates;
+      const bitrate = table[layer][bitrateIndex - 1] * 1000;
+      const sampleRate = baseRates[sampleIndex] / (version === 3 ? 1 : version === 2 ? 2 : 4);
+      const padding = (bytes[offset + 2] >> 1) & 1;
+      const samples = layer === 3 ? 384 : (layer === 1 && version !== 3 ? 576 : 1152);
+      const frameBytes = layer === 3 ? Math.floor(12 * bitrate / sampleRate + padding) * 4
+        : Math.floor((version === 3 || layer === 2 ? 144 : 72) * bitrate / sampleRate) + padding;
+      return { version, layer, sampleRate, samples, frameBytes, mode:(bytes[offset + 3] >> 6) & 3 };
+    }
+    let first = null, firstOffset = -1;
+    for (let i = start; i + 4 <= bytes.length; i++) {
+      const frame = frameAt(i);
+      if (frame && frame.frameBytes >= 4) { first = frame; firstOffset = i; break; }
+    }
+    if (!first) return null;
+    const crcBytes = (bytes[firstOffset + 1] & 1) ? 0 : 2;
+    const mono = first.mode === 3;
+    const sideInfo = first.version === 3 ? (mono ? 17 : 32) : (mono ? 9 : 17);
+    const xing = firstOffset + 4 + crcBytes + sideInfo;
+    if (xing + 12 <= bytes.length &&
+        ((bytes[xing] === 88 && bytes[xing+1] === 105 && bytes[xing+2] === 110 && bytes[xing+3] === 103) ||
+         (bytes[xing] === 73 && bytes[xing+1] === 110 && bytes[xing+2] === 102 && bytes[xing+3] === 111))) {
+      const flags = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(xing + 4, false);
+      if ((flags & 1) && xing + 12 <= bytes.length) {
+        const count = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(xing + 8, false);
+        if (count) return estimateDecodedMemoryMBForDuration(count * first.samples / first.sampleRate, outputSampleRate, mono ? 1 : 2);
+      }
+    }
+    // Without a Xing frame count, sample actual frame sizes near the start
+    // and extrapolate from frames/bytes. A 35% margin covers trailing tags and
+    // bitrate variation while avoiding a full-file scan or allocation.
+    let offset = firstOffset, frames = 0, sampledBytes = 0;
+    while (offset + 4 <= bytes.length && frames < 12000) {
+      const frame = frameAt(offset);
+      if (!frame || frame.sampleRate !== first.sampleRate || frame.frameBytes < 4 || offset + frame.frameBytes > bytes.length) break;
+      sampledBytes += frame.frameBytes; frames++; offset += frame.frameBytes;
+    }
+    if (!frames || !sampledBytes) return null;
+    const seconds = file.size / sampledBytes * frames * first.samples / first.sampleRate * 1.35;
+    return estimateDecodedMemoryMBForDuration(seconds, outputSampleRate, mono ? 1 : 2, 1);
+  }
+
+  async function estimateADTSMemoryMB(file, outputSampleRate) {
+    if (!/\.aac$/i.test(file.name) || file.size < 7) return null;
+    const bytes = new Uint8Array(await file.slice(0, Math.min(file.size, 256 * 1024)).arrayBuffer());
+    const rates = [96000,88200,64000,48000,44100,32000,24000,22050,16000,12000,11025,8000,7350];
+    let offset = 0, sampledBytes = 0, decodedSeconds = 0, channels = 1, frames = 0;
+    while (offset + 7 <= bytes.length && frames < 5000) {
+      if (bytes[offset] !== 255 || (bytes[offset + 1] & 246) !== 240) { offset++; continue; }
+      const sampleIndex = (bytes[offset + 2] >> 2) & 15;
+      const frameBytes = ((bytes[offset + 3] & 3) << 11) | (bytes[offset + 4] << 3) | (bytes[offset + 5] >> 5);
+      const headerBytes = (bytes[offset + 1] & 1) ? 7 : 9;
+      if (sampleIndex >= rates.length || frameBytes < headerBytes || offset + frameBytes > bytes.length) { offset++; continue; }
+      const channelConfig = ((bytes[offset + 2] & 1) << 2) | ((bytes[offset + 3] >> 6) & 3);
+      channels = Math.max(channels, channelConfig === 1 ? 1 : 2);
+      const rawBlocks = (bytes[offset + 6] & 3) + 1;
+      decodedSeconds += rawBlocks * 1024 / rates[sampleIndex];
+      sampledBytes += frameBytes; frames++; offset += frameBytes;
+    }
+    if (!frames || !sampledBytes) return null;
+    const duration = file.size / sampledBytes * decodedSeconds * 1.35;
+    return estimateDecodedMemoryMBForDuration(duration, outputSampleRate, channels, 1);
+  }
+
+  async function estimateCompressedAudioMemoryMB(file, outputSampleRate) {
+    try {
+      return await estimateMP3MemoryMB(file, outputSampleRate) ??
+        await estimateM4AMemoryMB(file, outputSampleRate) ??
+        await estimateADTSMemoryMB(file, outputSampleRate);
+    } catch (err) {
+      console.warn('Could not estimate compressed audio duration before decoding', err);
+      return null;
+    }
+  }
+
   async function decodeAudioFile(file) {
     if (!file || !file.size) throw new Error('空のファイルです');
     // Keep a practical ceiling for iPhone memory pressure. This is not a hard format limit.
@@ -301,9 +443,10 @@
     }
     const ac = await unlockAudio();
     if (IS_IOS) {
-      const estimatedMB = await estimateWavMemoryMB(file, ac.sampleRate);
+      const estimatedMB = await estimateWavMemoryMB(file, ac.sampleRate) ??
+        await estimateCompressedAudioMemoryMB(file, ac.sampleRate);
       if (estimatedMB != null && estimatedMB > 430) {
-        throw new Error('このWAV音源はiPhoneのメモリ上限に近いため読み込めません。短く分割するか、MP3/M4A版をお試しください。');
+        throw new Error('この音源はiPhoneのメモリ上限に近いため読み込めません。短く分割するか、より短い音源をお試しください。');
       }
     }
     const arrayBuf = await file.arrayBuffer();
@@ -683,9 +826,11 @@
     $('refBtn').disabled = true;
     try {
       if (IS_IOS) {
-        const estimatedMB = await estimateWavMemoryMB(file, S.audioCtx?.sampleRate || S.sr);
+        const outputSampleRate = S.audioCtx?.sampleRate || S.sr;
+        const estimatedMB = await estimateWavMemoryMB(file, outputSampleRate) ??
+          await estimateCompressedAudioMemoryMB(file, outputSampleRate);
         if (estimatedMB != null && estimateLiveAudioMemoryMB() + estimatedMB > 430) {
-          throw new Error('ボーカルとお手本を合わせた音源はiPhoneのメモリ上限に近いため読み込めません。短いお手本音源をお試しください。');
+          throw new Error('ボーカルとお手本を合わせた音源はiPhoneのメモリ上限に近いため読み込めません。短く分割するか圧縮音源をお試しください。');
         }
       }
       const decoded = await decodeAudioFile(file);
