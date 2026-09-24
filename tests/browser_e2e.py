@@ -328,6 +328,11 @@ def main():
             assert metrics['documentWidth']<=metrics['width'], f'horizontal overflow on mobile: {metrics}'
             assert metrics['touchPoints']>0 or browser_name=='webkit', f'touch input unavailable: {metrics}'
             assert metrics['essentialButtonsVisible'], f'essential mobile controls are not visible: {metrics}'
+            page.wait_for_function("document.querySelector('#topbar').classList.contains('has-overflow-right')",timeout=3000)
+            page.locator('#topbar').evaluate("el => { el.scrollLeft=el.scrollWidth; el.dispatchEvent(new Event('scroll')); }")
+            page.wait_for_function("document.querySelector('#topbar').classList.contains('has-overflow-left') && !document.querySelector('#topbar').classList.contains('has-overflow-right')",timeout=3000)
+            page.locator('#topbar').evaluate("el => { el.scrollLeft=0; el.dispatchEvent(new Event('scroll')); }")
+            page.wait_for_function("!document.querySelector('#topbar').classList.contains('has-overflow-left') && document.querySelector('#topbar').classList.contains('has-overflow-right')",timeout=3000)
             if browser_name=='mobile-mini':
                 page.emulate_media(reduced_motion='reduce')
                 motion=page.evaluate("""() => ({
