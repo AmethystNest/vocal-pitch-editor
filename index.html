@@ -288,6 +288,10 @@
     .strengthRange { height:44px; margin:4px 0 2px; }
   }
 
+  @media (max-width:340px) {
+    #inspector .rowBtns { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
+  }
+
   /* Mobile tap reliability: iPhone Safari + Android Chrome */
   #pitchCanvas, canvas {
     touch-action: none;
