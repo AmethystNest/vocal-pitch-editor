@@ -335,7 +335,7 @@ def main():
                 leftOpacity:getComputedStyle(el,'::before').opacity,
                 rightOpacity:getComputedStyle(el,'::after').opacity
             })""")
-            assert cues['left']=='none' and cues['right']=='"›"' and float(cues['rightOpacity'])>0, f'right scroll cue is not visible: {cues}'
+            assert cues['left'] in ('none', '"‹"') and cues['right']=='"›"' and float(cues['rightOpacity'])>0 and float(cues['leftOpacity'])==0, f'right scroll cue is not visible: {cues}'
             page.locator('#topbar').evaluate("el => { el.scrollLeft=el.scrollWidth; el.dispatchEvent(new Event('scroll')); }")
             page.wait_for_function("document.querySelector('#topbar').classList.contains('has-overflow-left') && !document.querySelector('#topbar').classList.contains('has-overflow-right')",timeout=3000)
             cues=page.locator('#topbar').evaluate("""el => ({
@@ -344,7 +344,7 @@ def main():
                 leftOpacity:getComputedStyle(el,'::before').opacity,
                 rightOpacity:getComputedStyle(el,'::after').opacity
             })""")
-            assert cues['left']=='"‹"' and cues['right']=='none' and float(cues['leftOpacity'])>0, f'left scroll cue is not visible: {cues}'
+            assert cues['left']=='"‹"' and cues['right'] in ('none', '"›"') and float(cues['leftOpacity'])>0 and float(cues['rightOpacity'])==0, f'left scroll cue is not visible: {cues}'
             page.locator('#topbar').evaluate("el => { el.scrollLeft=0; el.dispatchEvent(new Event('scroll')); }")
             page.wait_for_function("!document.querySelector('#topbar').classList.contains('has-overflow-left') && document.querySelector('#topbar').classList.contains('has-overflow-right')",timeout=3000)
             if browser_name=='mobile-mini':
