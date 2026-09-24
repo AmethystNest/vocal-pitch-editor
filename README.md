@@ -76,7 +76,7 @@ Run `npm run check` for syntax checks. Serve over HTTP(S) for Worker/PWA testing
 Automated mobile tests emulate iPhone viewport dimensions and touch in Chromium; they do not prove real iOS Safari behavior. Before calling an iPhone release verified, test Safari and the Add to Home Screen app on a physical device: import WAV and M4A from Files, analyze and edit a note, use VoiceOver and a hardware keyboard to navigate/correct/undo, play vocal/reference, background and resume the app during playback, rotate while dragging, export through Share and Save to Files, then relaunch offline. Record the iPhone model, iOS version, source format/duration and result for each path.
 
 ## QA
-`npm run qa` validates JS syntax plus deterministic F0/noise/dry-path regression tests.
+`npm run qa` validates JS syntax plus deterministic F0/noise/dry-path regression tests. GitHub Actions additionally runs the 320×568 iPhone E2E, WebKit mobile coverage, FFmpeg-generated MP3/M4A/AAC imports, the iPhone share/download handoff and HTTPS offline-PWA reload on pushes and pull requests.
 
 ## v20: 回帰テスト基盤
 
@@ -93,7 +93,7 @@ Windows + Playwright Chromiumで `npm run test:browser` 相当のE2Eを実行し
 
 `BROWSER=mobile-cycle` は参照音源の再生中にメイン音源を差し替え、旧参照・Undo履歴が解除され、新しい音程だけを書き出すことを検証する。
 
-`BROWSER=webkit` はPlaywright WebKitの390×844モバイルシェルと横はみ出しを検証する。Windows配布のPlaywright WebKitにWeb Audio APIがない環境では、音声処理を実行せず部分PASSとして明示する。この結果はiPhone Safari音声対応の判定には使えない。
+`BROWSER=webkit` はPlaywright WebKitの390×844 iPhoneユーザーエージェントでレイアウトを検証し、Web Audio APIが使える環境では読込・編集・再生・WAV保存フォールバックも実行する。OS共有シート自体は自動化せず、保存経路を確認する。Windows配布WebKitにWeb Audio APIがない環境ではシェル確認のみの部分PASSになる。いずれも実機iPhone Safariの代替ではない。
 
 `BROWSER=mobile-mp3` と `BROWSER=mobile-m4a` は、iPhone User-AgentのChromiumでFFmpeg生成のMP3/AAC音源をデコードし、解析・タッチ編集・Undo・WAV書き出しまで検証する。これらの追加カバレッジだけFFmpegが必要。
 
