@@ -501,6 +501,11 @@
       // returning to Safari does not leave a stale source/play state.
       try { stopPlayback(); } catch (e) {}
       try { stopReference(); } catch (e) {}
+      S.soloPreviewGeneration = (S.soloPreviewGeneration || 0) + 1;
+      if (S.soloSource) {
+        try { S.soloSource.onended = null; S.soloSource.stop(); } catch (e) {}
+        S.soloSource = null;
+      }
     } else {
       if (WORKER_IS_IOS && !worker) {
         try { createAudioWorker(); } catch (e) {}
@@ -593,6 +598,8 @@
     S.pendingFullResynth = false;
     S.pendingResynthSet.clear();
     S.resynthQueued = false;
+    S.soloPreviewGeneration = (S.soloPreviewGeneration || 0) + 1;
+    S.referenceRequestId = (S.referenceRequestId || 0) + 1;
     stopPlayback();
     stopReference();
     if (S.soloSource) {
@@ -854,7 +861,9 @@
 
   async function loadReference(file) {
     if (!S.pitchTrack) { toastMsg('先にボーカル音源を読み込んでください'); return; }
+    stopReference();
     const audioSessionId = S.audioSessionId;
+    const referenceRequestId = S.referenceRequestId = (S.referenceRequestId || 0) + 1;
     toastMsg('リファレンスを解析中...', 5000);
     $('refBtn').disabled = true;
     try {
@@ -867,7 +876,7 @@
         }
       }
       const decoded = await decodeAudioFile(file);
-      if (audioSessionId !== S.audioSessionId) return;
+      if (audioSessionId !== S.audioSessionId || referenceRequestId !== S.referenceRequestId) return;
       const durationSec = decoded.duration || (decoded.length / decoded.sampleRate);
       if (IS_IOS) {
         const combinedMemMB = estimateLiveAudioMemoryMB() + estimateDecodedMemoryMB(decoded);
@@ -894,7 +903,7 @@
         { type: 'reference', refSignal: refMono, refSr: refAnalysis.sr, opts: yinOptsForSampleRate(refAnalysis.sr), vocalPitchTrack: S.pitchTrack, vocalSegments: vocalSegsPlain },
         [refMono.buffer]
       );
-      if (audioSessionId !== S.audioSessionId) return;
+      if (audioSessionId !== S.audioSessionId || referenceRequestId !== S.referenceRequestId) return;
       res.suggestions.forEach((sugg, i) => { if (S.segments[i]) { S.segments[i].refSuggestMidi = sugg; S.segments[i].refExpression = res.expressions && res.expressions[i] ? Float64Array.from(res.expressions[i]) : null; } });
       S.referenceLoaded = true;
       S.referenceBuffer = decoded; // kept at full quality (original channel count) for playback
@@ -912,14 +921,14 @@
           ? '手本と現在の音程が一致しており、適用できる補正はありません'
           : 'リファレンスを解析しましたが、対応する候補が見つかりませんでした', 3000);
     } catch (err) {
-      if (audioSessionId !== S.audioSessionId) return;
+      if (audioSessionId !== S.audioSessionId || referenceRequestId !== S.referenceRequestId) return;
       console.error(err);
       const detail = err && err.message ? ` (${err.message})` : '';
       toastMsg(`リファレンスを読み込めませんでした。iPhoneでは WAV / MP3 / M4A(AAC) を推奨します。${detail}`, 5000, true);
     } finally {
       // Do not let an obsolete reference request re-enable controls owned by
       // a newer main-audio session.
-      if (audioSessionId === S.audioSessionId) $('refBtn').disabled = false;
+      if (audioSessionId === S.audioSessionId && referenceRequestId === S.referenceRequestId) $('refBtn').disabled = false;
     }
   }
 
@@ -929,9 +938,15 @@
   // be past its end).
   async function playReference() {
     if (!S.referenceBuffer) return;
+    stopReference();
+    const generation = S.referencePlaybackGeneration = (S.referencePlaybackGeneration || 0) + 1;
+    const audioSessionId = S.audioSessionId;
+    const referenceRequestId = S.referenceRequestId;
     // iOS Safari requires a user activation to resume Web Audio. Await the
     // same unlock path used by main playback before starting this source.
     await unlockAudio();
+    if (document.hidden || generation !== S.referencePlaybackGeneration ||
+        audioSessionId !== S.audioSessionId || referenceRequestId !== S.referenceRequestId || !S.referenceBuffer) return;
     stopReference();
     if (S.playing) stopPlayback();
     const vocalT = getPlayheadTime();
@@ -953,6 +968,7 @@
     requestAnimationFrame(tick);
   }
   function stopReference() {
+    S.referencePlaybackGeneration = (S.referencePlaybackGeneration || 0) + 1;
     if (S.refSource) { try { S.refSource.onended = null; S.refSource.stop(); } catch (e) {} S.refSource = null; }
     S.refPlaying = false;
     $('refPlayBtn').textContent = '🎯▶';
@@ -2484,6 +2500,9 @@
     const wasPlaying = S.playing;
     const resumeAt = getPlayheadTime();
     if (wasPlaying) stopPlayback(true);
+    // Only this render's own pause may be resumed. A later stop, seek,
+    // background transition or fresh playback supersedes that intent.
+    const resumeGeneration = S.playbackGeneration;
     try {
       if (S.pendingFullResynth) {
         S.pendingFullResynth = false;
@@ -2506,11 +2525,22 @@
       S.editedBuffer = null;
       S.audioRevision = Math.max(S.audioRevision, renderingRevision);
       if (wasPlaying) {
+        if (!document.hidden && resumeGeneration === S.playbackGeneration) {
+          await rebuildEditedBuffer();
+          if (audioSessionId === S.audioSessionId && !document.hidden &&
+              resumeGeneration === S.playbackGeneration) {
+            S.playStartOffsetSec = resumeAt;
+            startPlayback(true);
+          }
+        }
+      } else if (!document.hidden && S.previewSegId != null && S.autoPreviewEnabled) {
+        const previewGeneration = S.soloPreviewGeneration;
+        const previewSegId = S.previewSegId;
         await rebuildEditedBuffer();
-        S.playStartOffsetSec = resumeAt; startPlayback(true);
-      } else if (S.previewSegId != null && S.autoPreviewEnabled) {
-        await rebuildEditedBuffer();
-        await playSegmentSolo(S.segments.find((seg) => seg.id === S.previewSegId));
+        if (audioSessionId === S.audioSessionId && !document.hidden &&
+            previewGeneration === S.soloPreviewGeneration) {
+          await playSegmentSolo(S.segments.find((seg) => seg.id === previewSegId));
+        }
       }
       S.previewSegId = null;
     } catch (err) {
@@ -2673,9 +2703,12 @@
   // pile up overlapping audio.
   async function playSegmentSolo(seg) {
     if (!seg || !S.origChannels) return;
+    const generation = S.soloPreviewGeneration = (S.soloPreviewGeneration || 0) + 1;
     if (!S.editedBuffer) await rebuildEditedBuffer();
+    if (document.hidden || generation !== S.soloPreviewGeneration) return;
     if (S.soloSource) { try { S.soloSource.onended = null; S.soloSource.stop(); } catch (e) {} S.soloSource = null; }
     await unlockAudio();
+    if (document.hidden || generation !== S.soloPreviewGeneration || !S.editedBuffer) return;
     const src = S.audioCtx.createBufferSource();
     src.buffer = S.editedBuffer;
     src.connect(S.audioCtx.destination);
@@ -2692,6 +2725,7 @@
     t = Math.max(0, Math.min(dur, t));
     const wasPlaying = S.playing;
     if (wasPlaying) stopPlayback(true);
+    else S.playbackGeneration = (S.playbackGeneration || 0) + 1;
     S.playStartOffsetSec = t;
     if (wasPlaying) startPlayback();
     render();
@@ -2699,8 +2733,11 @@
 
   async function startPlayback(skipFlush = false) {
     if (!S.origChannels) return;
+    const generation = S.playbackGeneration = (S.playbackGeneration || 0) + 1;
+    const audioSessionId = S.audioSessionId;
     stopReference();
     await unlockAudio();
+    if (document.hidden || generation !== S.playbackGeneration || audioSessionId !== S.audioSessionId) return;
 
     // On slower iPhones the user can hit Play before the debounce/Worker has
     // committed the latest pitch edit. Always catch audio up to the UI first.
@@ -2711,8 +2748,10 @@
     )) {
       toastMsg('補正を音声へ反映中…', 1200);
       await flushResynth();
+      if (document.hidden || generation !== S.playbackGeneration || audioSessionId !== S.audioSessionId) return;
     }
     if (!S.editedBuffer) await rebuildEditedBuffer();
+    if (document.hidden || generation !== S.playbackGeneration || audioSessionId !== S.audioSessionId) return;
     if (!S.editedBuffer) return;
 
     const src = S.audioCtx.createBufferSource();
@@ -2728,6 +2767,7 @@
     requestAnimationFrame(tick);
   }
   function stopPlayback(keepOffset) {
+    S.playbackGeneration = (S.playbackGeneration || 0) + 1;
     if (S.playSource) {
       try { S.playSource.onended = null; S.playSource.stop(); } catch (e) {}
       S.playSource = null;
