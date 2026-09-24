@@ -41,6 +41,14 @@ jobs:
         env:
           BROWSER: mobile-mini
         run: python tests/browser_e2e.py
+      - name: Run long-track iPhone memory E2E
+        env:
+          BROWSER: mobile-long
+        run: python tests/browser_e2e.py
+      - name: Run audio-session replacement E2E
+        env:
+          BROWSER: mobile-cycle
+        run: python tests/browser_e2e.py
       - name: Run WebKit mobile shell E2E
         env:
           BROWSER: webkit
