@@ -2796,7 +2796,7 @@
             btn.disabled = false;
             await result;
             resetExportAction(btn);
-            toastMsg('書き出しました');
+            toastMsg('共有を終了しました');
           } catch (shareErr) {
             if (shareErr && shareErr.name === 'AbortError') {
               resetExportAction(btn);
