@@ -76,7 +76,7 @@ Run `npm run check` for syntax checks. Serve over HTTP(S) for Worker/PWA testing
 Automated mobile tests emulate iPhone viewport dimensions and touch in Chromium; they do not prove real iOS Safari behavior. Before calling an iPhone release verified, test Safari and the Add to Home Screen app on a physical device: import WAV and M4A from Files, analyze and edit a note, use VoiceOver and a hardware keyboard to navigate/correct/undo, play vocal/reference, background and resume the app during playback, rotate while dragging, export through Share and Save to Files, then relaunch offline. Record the iPhone model, iOS version, source format/duration and result for each path.
 
 ## QA
-`npm run qa` validates JS syntax plus deterministic F0/noise/dry-path regression tests. GitHub Actions additionally runs the 320×568 iPhone E2E, WebKit mobile coverage, FFmpeg-generated MP3/M4A/AAC imports, the iPhone share/download handoff and HTTPS offline-PWA reload on pushes and pull requests.
+`npm run qa` validates JS syntax plus deterministic F0/noise/dry-path regression tests. GitHub Actions additionally runs the 320×568 iPhone E2E, long-track memory mode and audio-session replacement checks, WebKit mobile coverage, FFmpeg-generated MP3/M4A/AAC imports, the iPhone share/download handoff and HTTPS offline-PWA reload on pushes and pull requests.
 
 ## v20: 回帰テスト基盤
 
