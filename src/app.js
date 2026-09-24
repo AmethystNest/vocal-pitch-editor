@@ -115,6 +115,7 @@
   const $ = (id) => document.getElementById(id);
   const loadingScreen = $('loadingScreen'), editorScreen = $('editorScreen');
   const loadingStatus = $('loadingStatus');
+  const topbar = $('topbar');
   const fileInput = $('fileInput');
   const refFileInput = $('refFileInput');
   const canvas = $('rollCanvas'), rollWrap = $('rollWrap');
@@ -533,6 +534,16 @@
     window.matchMedia('(display-mode: fullscreen)').matches
   ) || window.navigator.standalone === true;
 
+  function updateToolbarScrollCue() {
+    if (!topbar) return;
+    const maxScroll = topbar.scrollWidth - topbar.clientWidth;
+    topbar.classList.toggle('has-overflow-left', topbar.scrollLeft > 1);
+    topbar.classList.toggle('has-overflow-right', topbar.scrollLeft < maxScroll - 1);
+  }
+  topbar.addEventListener('scroll', updateToolbarScrollCue, { passive: true });
+  window.addEventListener('resize', updateToolbarScrollCue, { passive: true });
+  requestAnimationFrame(updateToolbarScrollCue);
+
   function syncFullscreenButton() {
     const btn = $('fullscreenBtn');
     if (!btn) return;
@@ -804,6 +815,7 @@
       if (!enabled) control.setAttribute('tabindex', '-1');
       else control.removeAttribute('tabindex');
     });
+    requestAnimationFrame(updateToolbarScrollCue);
   }
 
   setControlsEnabled(false);
