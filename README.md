@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v50 mobile toolbar scroll cues
+
+Show a directional edge cue while the compact toolbar has more tools off-screen, and update it as users scroll toward either end. Mobile E2E verifies both directions at a 320px viewport so the one-row toolbar remains discoverable without shrinking touch targets.
+
 ## v49 accurate no-Xing MP3 VBR preflight
 
 Correct MPEG Layer bitrate tables and sample equal start, middle and end windows so Xing-less MP3 VBR duration estimates do not miss a high-bitrate section near the end. Synthetic VBR regression fixtures confirm oversized vocals and references are rejected before decode, while short real MP3, M4A and AAC still load on a compact iPhone-sized viewport.
