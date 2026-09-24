@@ -335,7 +335,14 @@ def main():
                 leftOpacity:getComputedStyle(el,'::before').opacity,
                 rightOpacity:getComputedStyle(el,'::after').opacity
             })""")
-            assert cues['right']=='"›"' and float(cues['rightOpacity'])>0 and float(cues['leftOpacity'])==0, f'right scroll cue is not visible: {cues}'
+            page.wait_for_function("parseFloat(getComputedStyle(document.querySelector('#topbar'),'::after').opacity) > 0.9",timeout=3000)
+            cues=page.locator('#topbar').evaluate("""el => ({
+                left:getComputedStyle(el,'::before').content,
+                right:getComputedStyle(el,'::after').content,
+                leftOpacity:getComputedStyle(el,'::before').opacity,
+                rightOpacity:getComputedStyle(el,'::after').opacity
+            })""")
+            assert cues['right']=='"›"' and float(cues['rightOpacity'])>0.9 and float(cues['leftOpacity'])<0.1, f'right scroll cue is not visible: {cues}'
             page.locator('#topbar').evaluate("el => { el.scrollLeft=el.scrollWidth; el.dispatchEvent(new Event('scroll')); }")
             page.wait_for_function("document.querySelector('#topbar').classList.contains('has-overflow-left') && !document.querySelector('#topbar').classList.contains('has-overflow-right')",timeout=3000)
             page.wait_for_function("parseFloat(getComputedStyle(document.querySelector('#topbar'),'::before').opacity) > 0.9 && parseFloat(getComputedStyle(document.querySelector('#topbar'),'::after').opacity) < 0.1",timeout=3000)
