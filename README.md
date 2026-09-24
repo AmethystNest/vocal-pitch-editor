@@ -1,5 +1,9 @@
 # Vocal Pitch Editor
 
+## v53 rotated pitch inspector layering
+
+Keep the mobile note inspector above the pitch canvas so fine-adjustment controls continue receiving touch input after the panel scrolls and the device rotates. Existing compact E2E now taps a fine-adjustment button, verifies Undo, rotates with the inspector still scrolled, and edits again. The Service Worker cache is v53.
+
 ## v52 narrow-phone touch targets
 
 At viewport widths of 340px or less, six pitch fine-adjustment buttons wrap to two rows of three so each remains at least 44×44 CSS pixels. The 320×568 mobile E2E checks rendered touch-target dimensions and that the pitch panel stays within the viewport. The Service Worker cache is v52.
