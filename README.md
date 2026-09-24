@@ -1,8 +1,8 @@
 # Vocal Pitch Editor
 
-## v50 mobile toolbar scroll cues
+## v51 visible mobile toolbar chevrons
 
-Show a directional edge cue while the compact toolbar has more tools off-screen, and update it as users scroll toward either end. Mobile E2E verifies both directions at a 320px viewport so the one-row toolbar remains discoverable without shrinking touch targets.
+Show a clear left or right chevron over the compact toolbar edge while more tools are off-screen. Mobile E2E checks the generated pseudo-element content and visible opacity at each end of a 320px viewport, so direction remains clear without shrinking touch targets. The Service Worker cache is v51.
 
 ## v49 accurate no-Xing MP3 VBR preflight
 
