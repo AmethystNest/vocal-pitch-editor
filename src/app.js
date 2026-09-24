@@ -350,29 +350,32 @@
       const tagSize = ((bytes[6] & 127) << 21) | ((bytes[7] & 127) << 14) | ((bytes[8] & 127) << 7) | (bytes[9] & 127);
       start = 10 + tagSize + ((bytes[5] & 16) ? 10 : 0);
     }
-    const mpeg1Rates = {1:[32,64,96,128,160,192,224,256,288,320,352,384,416,448],2:[32,48,56,64,80,96,112,128,160,192,224,256,320,384],3:[32,40,48,56,64,80,96,112,128,160,192,224,256,320]};
-    const mpeg2Rates = {1:[32,48,56,64,80,96,112,128,144,160,176,192,224,256],2:[8,16,24,32,40,48,56,64,80,96,112,128,144,160],3:[8,16,24,32,40,48,56,64,80,96,112,128,144,160]};
+    // Header layer bits are 3=Layer I, 2=Layer II, 1=Layer III.
+    const mpeg1Rates = {3:[32,64,96,128,160,192,224,256,288,320,352,384,416,448],2:[32,48,56,64,80,96,112,128,160,192,224,256,320,384],1:[32,40,48,56,64,80,96,112,128,160,192,224,256,320]};
+    const mpeg2Rates = {3:[32,48,56,64,80,96,112,128,144,160,176,192,224,256],2:[8,16,24,32,40,48,56,64,80,96,112,128,144,160],1:[8,16,24,32,40,48,56,64,80,96,112,128,144,160]};
     const baseRates = [44100,48000,32000];
-    function frameAt(offset) {
-      if (offset + 4 > bytes.length || bytes[offset] !== 255 || (bytes[offset + 1] & 224) !== 224) return null;
-      const version = (bytes[offset + 1] >> 3) & 3;
-      const layer = (bytes[offset + 1] >> 1) & 3;
-      const bitrateIndex = (bytes[offset + 2] >> 4) & 15;
-      const sampleIndex = (bytes[offset + 2] >> 2) & 3;
+    function frameAt(data, offset) {
+      if (offset + 4 > data.length || data[offset] !== 255 || (data[offset + 1] & 224) !== 224) return null;
+      const version = (data[offset + 1] >> 3) & 3;
+      const layer = (data[offset + 1] >> 1) & 3;
+      const bitrateIndex = (data[offset + 2] >> 4) & 15;
+      const sampleIndex = (data[offset + 2] >> 2) & 3;
       if (version === 1 || layer === 0 || bitrateIndex === 0 || bitrateIndex === 15 || sampleIndex === 3) return null;
       const table = version === 3 ? mpeg1Rates : mpeg2Rates;
       const bitrate = table[layer][bitrateIndex - 1] * 1000;
       const sampleRate = baseRates[sampleIndex] / (version === 3 ? 1 : version === 2 ? 2 : 4);
-      const padding = (bytes[offset + 2] >> 1) & 1;
+      const padding = (data[offset + 2] >> 1) & 1;
       const samples = layer === 3 ? 384 : (layer === 1 && version !== 3 ? 576 : 1152);
       const frameBytes = layer === 3 ? Math.floor(12 * bitrate / sampleRate + padding) * 4
         : Math.floor((version === 3 || layer === 2 ? 144 : 72) * bitrate / sampleRate) + padding;
-      return { version, layer, sampleRate, samples, frameBytes, mode:(bytes[offset + 3] >> 6) & 3 };
+      return { version, layer, sampleRate, samples, frameBytes, mode:(data[offset + 3] >> 6) & 3 };
     }
     let first = null, firstOffset = -1;
     for (let i = start; i + 4 <= bytes.length; i++) {
-      const frame = frameAt(i);
-      if (frame && frame.frameBytes >= 4) { first = frame; firstOffset = i; break; }
+      const frame = frameAt(bytes, i);
+      if (!frame || frame.frameBytes < 4 || i + frame.frameBytes + 4 > bytes.length) continue;
+      const nextFrame = frameAt(bytes, i + frame.frameBytes);
+      if (nextFrame && nextFrame.sampleRate === frame.sampleRate) { first = frame; firstOffset = i; break; }
     }
     if (!first) return null;
     const crcBytes = (bytes[firstOffset + 1] & 1) ? 0 : 2;
@@ -388,17 +391,31 @@
         if (count) return estimateDecodedMemoryMBForDuration(count * first.samples / first.sampleRate, outputSampleRate, mono ? 1 : 2);
       }
     }
-    // Without a Xing frame count, sample actual frame sizes near the start
-    // and extrapolate from frames/bytes. A 35% margin covers trailing tags and
-    // bitrate variation while avoiding a full-file scan or allocation.
-    let offset = firstOffset, frames = 0, sampledBytes = 0;
-    while (offset + 4 <= bytes.length && frames < 12000) {
-      const frame = frameAt(offset);
-      if (!frame || frame.sampleRate !== first.sampleRate || frame.frameBytes < 4 || offset + frame.frameBytes > bytes.length) break;
-      sampledBytes += frame.frameBytes; frames++; offset += frame.frameBytes;
+    // Xing-less VBR files can change bitrate after a quiet/high-quality intro.
+    // Sample equal windows at the start, middle and end instead of extrapolating
+    // from the first megabyte; no compressed-file-sized allocation or full scan.
+    const windowBytes = Math.min(256 * 1024, file.size);
+    const starts = [...new Set([0, Math.max(0, Math.floor((file.size-windowBytes)/2)), Math.max(0, file.size-windowBytes)])];
+    let sampledBytes = 0, sampledSeconds = 0;
+    for (const sampleStart of starts) {
+      const data = sampleStart === 0 ? bytes.subarray(0, windowBytes)
+        : new Uint8Array(await file.slice(sampleStart, sampleStart + windowBytes).arrayBuffer());
+      let offset = 0, frames = 0;
+      while (offset + 4 <= data.length && frames < 12000) {
+        const frame = frameAt(data, offset);
+        if (!frame || frame.frameBytes < 4 || offset + frame.frameBytes > data.length) { offset++; continue; }
+        const nextOffset = offset + frame.frameBytes;
+        if (nextOffset + 4 <= data.length) {
+          const nextFrame = frameAt(data, nextOffset);
+          if (!nextFrame || nextFrame.sampleRate !== frame.sampleRate) { offset++; continue; }
+        }
+        sampledBytes += frame.frameBytes;
+        sampledSeconds += frame.samples / frame.sampleRate;
+        frames++; offset = nextOffset;
+      }
     }
-    if (!frames || !sampledBytes) return null;
-    const seconds = file.size / sampledBytes * frames * first.samples / first.sampleRate * 1.35;
+    if (!sampledBytes || !sampledSeconds) return null;
+    const seconds = file.size * sampledSeconds / sampledBytes * 1.5;
     return estimateDecodedMemoryMBForDuration(seconds, outputSampleRate, mono ? 1 : 2, 1);
   }
 
