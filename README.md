@@ -1,20 +1,12 @@
 # Vocal Pitch Editor
 
-## v48 compressed input-buffer peak
+## v49 accurate no-Xing MP3 VBR preflight
 
-The iPhone compressed-audio preflight now includes the source file's temporary ArrayBuffer in the peak working-set estimate while `decodeAudioData` is allocating decoded PCM. Compact E2E covers a near-limit M4A where decoded audio alone fits but the compressed input buffer would exceed the cap.
+Correct MPEG Layer bitrate tables and sample equal start, middle and end windows so Xing-less MP3 VBR duration estimates do not miss a high-bitrate section near the end. Synthetic VBR regression fixtures confirm oversized vocals and references are rejected before decode, while short real MP3, M4A and AAC still load on a compact iPhone-sized viewport.
 
 ## v47 compressed-audio memory preflight
 
 Before decoding on iPhone, estimate the expanded working set of MP3 (Xing/frame sampling), M4A (movie header at the beginning or end), and AAC/ADTS (sampled frames). Oversized vocal files are rejected before `decodeAudioData`; an oversized reference file is rejected while preserving the loaded vocal. Compact iPhone E2E covers long synthetic headers for all three formats and verifies short real MP3/M4A/AAC still load. The Service Worker cache is v47.
-
-## v46 horizontal pan cancellation verification
-
-Horizontal swipes that begin on a note now keep both the finger-anchored pan origin and the original viewport. Cancelling the gesture restores the original view. Compact iPhone E2E verifies visibility and page-hide rollback and orientation canvas recovery.
-
-## v45 cancelled horizontal pan recovery
-
-Cancelling a horizontal swipe that begins on a note now restores the original viewport, including when iOS interrupts the gesture during rotation, backgrounding, or page teardown. The compact mobile E2E exercises all three interruption paths. The Service Worker cache is v45.
 
 ## v44 reduced motion
 
@@ -26,7 +18,7 @@ The previous/next note controls remain keyboard-focusable at the first and last 
 
 ## v42 reference correction feedback
 
-Bulk correction is disabled when the reference has no matching notes or when every detected note already matches the current pitch. The analysis message reports the number of actionable corrections or explains why none can be applied. Mobile browser E2E checks the identical-reference no-op case. The Service Worker cache is v42. Mobile accessibility E2E also checks VoiceOver-style next/previous navigation through three notes, pitch announcements, and inspector clearance at compact widths.
+Bulk correction is disabled when the reference has no matching notes or when every detected note already matches the current pitch. The analysis message reports the number of actionable corrections or explains why none can be applied. Mobile browser E2E checks the identical-reference no-op case. The Service Worker cache is v42.
 
 ## v41 mobile assistive-controls layout
 
