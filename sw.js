@@ -1,4 +1,4 @@
-const CACHE='vocal-pitch-editor-v52-narrow-phone-pitch-targets';
+const CACHE='vocal-pitch-editor-v53-rotated-inspector-layering';
 const SHELL=['./','./index.html','./manifest.webmanifest','./src/engine.js','./src/app.js','./src/worker.js','./icon-180.png','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',e=>e.waitUntil((async()=>{
   const cache=await caches.open(CACHE);
