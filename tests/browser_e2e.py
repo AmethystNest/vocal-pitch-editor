@@ -802,6 +802,7 @@ def main():
             page.wait_for_function("!document.querySelector('#exportBtn').disabled && !document.querySelector('#exportBtn').dataset.exportAction",timeout=5000)
             share_state=page.evaluate("() => ({calls:window.__testShareCalls,files:window.__testSharedFiles})")
             assert share_state['calls']==1 and share_state['files']==['tone_edited.wav'], f'native share success was not handled: {share_state}'
+            assert page.locator('#toast').text_content()=='共有を終了しました', 'native share completion was reported as a completed file export'
             assert not errors and not console_errors, f'share success raised browser errors: {errors}; {console_errors}'
             print(f'browser-e2e: PASS ({browser_name} native share success)')
             browser.close()
