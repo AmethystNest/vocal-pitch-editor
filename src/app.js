@@ -2541,13 +2541,13 @@
       } else {
         S.editedBuffer = null;
         if (!document.hidden && S.previewSegId != null && S.autoPreviewEnabled) {
-        const previewGeneration = S.soloPreviewGeneration;
-        const previewSegId = S.previewSegId;
-        await rebuildEditedBuffer();
-        if (audioSessionId === S.audioSessionId && !document.hidden &&
-            previewGeneration === S.soloPreviewGeneration) {
-          await playSegmentSolo(S.segments.find((seg) => seg.id === previewSegId));
-        }
+          const previewGeneration = S.soloPreviewGeneration;
+          const previewSegId = S.previewSegId;
+          await rebuildEditedBuffer();
+          if (audioSessionId === S.audioSessionId && !document.hidden &&
+              previewGeneration === S.soloPreviewGeneration) {
+            await playSegmentSolo(S.segments.find((seg) => seg.id === previewSegId));
+          }
         }
       }
       S.previewSegId = null;
