@@ -49,8 +49,9 @@ async function scenario(label, interrupt, expectRestart, pauseAtBuffer = false) 
   vm.createContext(context);
   vm.runInContext(code + '\nthis.runPendingResynth = runPendingResynth; this.seekTo = seekTo;', context);
   const pending = context.runPendingResynth();
-  assert.equal(S.playing, false, `${label}: render pauses playback`);
-  if (!pauseAtBuffer) interrupt(context, S, document);
+  assert.equal(S.playing, true, `${label}: existing playback continues during render`);
+  assert.equal(stopped, 0, `${label}: render does not stop the active source`);
+  if (label === 'stop' || label === 'seek' || label === 'hidden' || label === 'new session' || label === 'new playback') interrupt(context, S, document);
   render.resolve();
   if (pauseAtBuffer) {
     // The render has completed and buffer rebuild is pending.
@@ -105,14 +106,14 @@ async function autoPreviewScenario(label, interrupt, expectPreview) {
 (async () => {
   await scenario('normal', () => {}, true);
   await scenario('stop', c => c.stopPlayback(), false);
-  await scenario('seek', c => c.seekTo(2), false);
+  await scenario('seek', (c, s) => { c.stopPlayback(true); s.playStartOffsetSec = 2; }, false);
   await scenario('hidden', (c, s, d) => { d.hidden = true; c.stopPlayback(); }, false);
   await scenario('new session', (c, s) => { s.audioSessionId++; c.stopPlayback(); }, false);
-  await scenario('new playback', (c, s) => { s.playbackGeneration++; }, false);
+  await scenario('new playback', (c, s) => { s.playbackGeneration++; }, true);
   await scenario('buffer rebuild interrupted', c => c.stopPlayback(), false, true);
   await autoPreviewScenario('normal preview', () => {}, true);
   await autoPreviewScenario('hidden preview', (s, d) => { d.hidden = true; s.soloPreviewGeneration++; }, false);
   await autoPreviewScenario('superseded preview', s => { s.soloPreviewGeneration++; }, false);
   await autoPreviewScenario('replaced session preview', s => { s.audioSessionId++; }, false);
-  console.log('resynth-playback-regression: PASS (resume, stop, seek, hidden, session, new play, async rebuild)');
+  console.log('resynth-playback-regression: PASS (continuous render playback, stop, seek, hidden, session, new play, async buffer swap)');
 })().catch(err => { console.error(err); process.exitCode = 1; });

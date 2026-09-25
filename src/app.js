@@ -2498,11 +2498,8 @@
     const audioSessionId = S.audioSessionId;
     const renderingRevision = S.editRevision;
     const wasPlaying = S.playing;
-    const resumeAt = getPlayheadTime();
-    if (wasPlaying) stopPlayback(true);
-    // Only this render's own pause may be resumed. A later stop, seek,
-    // background transition or fresh playback supersedes that intent.
-    const resumeGeneration = S.playbackGeneration;
+    // Keep the current source playing while the replacement audio is rendered.
+    // Its old AudioBuffer remains valid until the completed render is ready.
     try {
       if (S.pendingFullResynth) {
         S.pendingFullResynth = false;
@@ -2522,24 +2519,32 @@
       if (audioSessionId !== S.audioSessionId) return;
       // Keep rendered PCM authoritative; WebAudio AudioBuffer is a second
       // full-size PCM copy, so materialize it lazily on iPhone/mobile.
-      S.editedBuffer = null;
       S.audioRevision = Math.max(S.audioRevision, renderingRevision);
       if (wasPlaying) {
-        if (!document.hidden && resumeGeneration === S.playbackGeneration) {
+        if (!document.hidden && S.playing) {
+          // Prepare the replacement while the old source continues. Keep the
+          // old AudioBuffer installed until this completes so tick() keeps
+          // the active source alive.
           await rebuildEditedBuffer();
-          if (audioSessionId === S.audioSessionId && !document.hidden &&
-              resumeGeneration === S.playbackGeneration) {
+          if (audioSessionId === S.audioSessionId && !document.hidden && S.playing) {
+            const resumeAt = getPlayheadTime();
+            stopPlayback(true);
             S.playStartOffsetSec = resumeAt;
             startPlayback(true);
           }
+        } else {
+          S.editedBuffer = null;
         }
-      } else if (!document.hidden && S.previewSegId != null && S.autoPreviewEnabled) {
-        const previewGeneration = S.soloPreviewGeneration;
-        const previewSegId = S.previewSegId;
-        await rebuildEditedBuffer();
-        if (audioSessionId === S.audioSessionId && !document.hidden &&
-            previewGeneration === S.soloPreviewGeneration) {
-          await playSegmentSolo(S.segments.find((seg) => seg.id === previewSegId));
+      } else {
+        S.editedBuffer = null;
+        if (!document.hidden && S.previewSegId != null && S.autoPreviewEnabled) {
+          const previewGeneration = S.soloPreviewGeneration;
+          const previewSegId = S.previewSegId;
+          await rebuildEditedBuffer();
+          if (audioSessionId === S.audioSessionId && !document.hidden &&
+              previewGeneration === S.soloPreviewGeneration) {
+            await playSegmentSolo(S.segments.find((seg) => seg.id === previewSegId));
+          }
         }
       }
       S.previewSegId = null;
