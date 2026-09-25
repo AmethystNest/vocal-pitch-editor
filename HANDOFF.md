@@ -2,6 +2,14 @@
 
 ## CURRENT STATE — 2026-09-25 (current local measurements)
 
+### Current development cycle — edited note collapsed to silence (2026-09-25, cloud session)
+
+- **User-reported defect:** moving a note with pitch correction destroyed its sound.
+- **Root cause (reproduced in real Chromium):** `segmentToPlain()` in `src/app.js` sends segments without `durationSec`; `buildGrainSchedule()` bounded its loop with `seg.durationSec * 1700`, i.e. `NaN`, so no PSOLA grains were ever scheduled for app edits. The blend mask still switched the note to the (empty) wet signal, so the edited note became ~0.45 s of silence (energy ratio 0.002). Engine unit tests passed because they used full segment objects. Fixed in the engine by deriving the duration from `endTime - startTime`.
+- **Secondary defects fixed in the same path:** (1) the feathered blend reached a few ms past the first/last grain of a note → a hole followed by a full-scale step (second-difference 25–80× the source) at edited note boundaries; the blend is now limited to the output ranges that received grains (`limitBlendToCoverage`) and mask frames are clipped to their note. (2) Overlap-add divided by a near-zero window sum on large downward shifts (zero samples between grains, octave-down kept the original pitch); division now uses a 0.5 floor, leaving upward/small shifts (overlap ≥ ~0.7) numerically unchanged. (3) Mask hop derived from frame times instead of analysis-rate `hopSize` (defensive for iPhone downsampled analysis; no audible difference measured at 2× downsampling).
+- **Measured:** `npm run qa` PASS; solo/playback background regressions PASS; new regression cases (legato phrase, app-shaped plain segments, full vs chunked equality, ±2/±7/−12 st, octave-down, downsampled analysis) PASS and fail on the previous engine. Real headless Chromium (Linux, Playwright 1.56 + pre-installed Chromium, script not committed): load 5-note legato WAV → keyboard select note 3 → ArrowUp/Down → export WAV; edited note measured +2.0 / −3.0 / +7.0 st, longest silent run ≤2 samples (previous build: 19 970-sample silence). Synthetic glottal/formant vowels only; **no real vocal recording, listening test, iPhone Safari or installed PWA verification in this cycle.**
+- PWA cache bumped to `v55-edited-note-silence-fix`.
+
 ### Current development cycle — resynthesis playback race and Git execution boundary (2026-09-25)
 
 - **Next quality defect verified in source:** an asynchronous edit resynthesis previously resumed the playhead after a user stop, seek, background transition or new playback; its `wasPlaying` snapshot was stale after an `await`. `src/app.js` now records the playback generation after its own pause and only auto-resumes if generation, session and visibility are still current, both before and after `rebuildEditedBuffer()`. Seeking while a render has paused playback also invalidates the stale resume intent. Existing solo/background guards and audio DSP are preserved.

@@ -1023,6 +1023,9 @@
     const tail = Math.floor(sr * 0.08);
     const outLen = n + tail;
     const grains = [];
+    // Output sample ranges that actually receive PSOLA grains. The wet/dry
+    // blend must stay inside these ranges; elsewhere the wet signal is silent.
+    const cells = [];
 
     for (const seg of segments) {
       if (!segmentHasPitchEdit(seg)) continue;
@@ -1036,7 +1039,11 @@
       let sourceHint = first;
       let safety = 0;
 
-      while (outTime < seg.endTime && safety++ < Math.ceil(seg.durationSec * 1700) + 32) {
+      // The app sends plain segments without durationSec; relying on it made
+      // this bound NaN, so no grains were scheduled and the edited note went
+      // silent. Derive the duration from the segment's own time range.
+      const segDuration = Math.max(0, seg.endTime - seg.startTime);
+      while (outTime < seg.endTime && safety++ < Math.ceil(segDuration * 1700) + 32) {
         const vHere = nearestFlag(outTime, times, voiced);
         const pIn = inputPeriodAt(outTime, times, filledF0, defaultF0);
         let shiftSemi = seg.shiftSemitones + seg.fineCents / 100 + lineOffsetAt(seg, times, outTime);
@@ -1068,6 +1075,14 @@
           }
 
           const outCenter = Math.round(outTime * sr);
+          const cellHalf = Math.max(1, Math.round(pOut * sr * 0.5));
+          const cellLo = Math.max(0, outCenter - cellHalf, Math.round(seg.startTime * sr));
+          const cellHi = Math.min(n, outCenter + cellHalf, Math.round(seg.endTime * sr));
+          if (cellHi > cellLo) {
+            const last = cells.length ? cells[cells.length - 1] : null;
+            if (last && cellLo <= last[1] + 2) last[1] = Math.max(last[1], cellHi);
+            else cells.push([cellLo, cellHi]);
+          }
           for (const src of sources) {
             const m = src.mark;
             const srcCenter = m.sample;
@@ -1094,8 +1109,16 @@
     }
 
     const resultLen = Math.min(outLen, n + Math.floor(0.05 * sr));
-    return { grains, outLen, resultLen };
+    return { grains, outLen, resultLen, cells };
   }
+
+  // Overlap-add normalisation floor. Upward shifts (and small downward ones)
+  // always overlap by at least ~0.7, so they keep exact window-sum
+  // normalisation. Large downward shifts leave gaps between grains; dividing
+  // by a near-zero window sum there un-tapered each grain (a hard edge, and
+  // at an octave down literally a 0 sample between grains) and restored the
+  // original period, so the note buzzed at the old pitch.
+  const NORM_FLOOR = 0.5;
 
   // Cache of Hann windows by length to avoid recomputation across channels.
   function makeWinCache() {
@@ -1121,7 +1144,7 @@
       }
     }
     const result = new Float32Array(resultLen);
-    for (let i = 0; i < resultLen; i++) result[i] = outNorm[i] > 1e-6 ? out[i] / outNorm[i] : 0;
+    for (let i = 0; i < resultLen; i++) result[i] = out[i] / Math.max(outNorm[i], NORM_FLOOR);
     return result;
   }
 
@@ -1141,7 +1164,13 @@
     // voiced neighbors and enough cycle periodicity. This intentionally leaves
     // the first/last frame of a voiced run dry, which protects consonants and
     // breathy attacks from the pitch shifter.
-    const hop = Math.max(1, pitchTrack.hopSize || Math.round(sr * 0.01));
+    // pitchTrack.hopSize is in ANALYSIS samples, which differ from the output
+    // rate when iPhone analyses a downsampled copy. Derive the frame spacing
+    // from the frame times so every voiced frame covers its whole interval.
+    const hopSec = times.length > 1
+      ? (times[times.length - 1] - times[0]) / (times.length - 1)
+      : (pitchTrack.hopSize || 512) / sr;
+    const hop = Math.max(1, Math.round(hopSec * sr));
     for (let fi = 0; fi < times.length; fi++) {
       if (!voiced[fi]) continue;
       const prevVoiced = fi > 0 ? !!voiced[fi - 1] : false;
@@ -1163,8 +1192,10 @@
         if (periodicity < 0.30) continue;
       }
 
-      const lo = Math.max(0, center - (hop >> 1));
-      const hi = Math.min(n, center + ((hop + 1) >> 1));
+      // Never let a frame spill across its note boundary: the neighbouring
+      // note has a different (or no) shift and no grains of this note.
+      const lo = Math.max(0, center - (hop >> 1), Math.round(seg.startTime * sr));
+      const hi = Math.min(n, center + ((hop + 1) >> 1), Math.round(seg.endTime * sr));
       for (let i = lo; i < hi; i++) mask[i] = 1;
     }
 
@@ -1183,6 +1214,27 @@
       if (outIdx >= 0 && outIdx < n) smoothed[outIdx] = Math.min(1, acc / Math.max(1, fade));
     }
     return smoothed;
+  }
+
+  // The feathered blend mask can reach a few milliseconds past the first or
+  // last synthesis mark of a note, where the wet signal has no grains at all.
+  // Mixing that silence in produced an audible hole followed by a hard click
+  // at every edited note boundary. Restrict the blend to the ranges that
+  // actually received grains, fading in/out inside them.
+  function limitBlendToCoverage(blend, cells, sr) {
+    const n = blend.length;
+    const fade = Math.max(8, Math.round(sr * 0.006));
+    let pos = 0;
+    for (const [a, b] of cells) {
+      for (let i = pos; i < Math.min(a, n); i++) blend[i] = 0;
+      for (let i = a; i < Math.min(b, n); i++) {
+        const edge = Math.min(i - a, b - 1 - i);
+        if (edge < fade) blend[i] *= edge / fade;
+      }
+      pos = Math.max(pos, b);
+    }
+    for (let i = pos; i < n; i++) blend[i] = 0;
+    return blend;
   }
 
   // PSOLA can lower a vowel's level even when its pitch remains correct,
@@ -1239,12 +1291,13 @@
     if (!hasAnyEdit) return channels.map((ch) => Float32Array.from(ch));
 
     const guideSignal = makePsolaGuide(channels);
-    const blend = buildResynthBlendMask(sr, n, pitchTrack, segments, Object.assign({}, opts || {}, { guideSignal }));
+    const sharedOpts = Object.assign({}, opts || {}, { guideSignal });
+    const schedule = buildGrainSchedule(sr, n, pitchTrack, segments, sharedOpts);
+    const blend = limitBlendToCoverage(buildResynthBlendMask(sr, n, pitchTrack, segments, sharedOpts), schedule.cells, sr);
     let anyWet = false;
     for (let i = 0; i < blend.length; i++) { if (blend[i] > 1e-5) { anyWet = true; break; } }
     if (!anyWet) return channels.map((ch) => Float32Array.from(ch));
 
-    const schedule = buildGrainSchedule(sr, n, pitchTrack, segments, Object.assign({}, opts || {}, { guideSignal }));
     const winCache = makeWinCache();
     const outputs = channels.map((ch) => {
       const wet = applyGrainSchedule(ch, schedule, winCache);
@@ -1271,12 +1324,12 @@
 
     const guideSignal = makePsolaGuide(channels);
     const sharedOpts = Object.assign({}, opts, { guideSignal });
-    const blend = buildResynthBlendMask(sr, n, pitchTrack, segments, sharedOpts);
+    const schedule = buildGrainSchedule(sr, n, pitchTrack, segments, sharedOpts);
+    const blend = limitBlendToCoverage(buildResynthBlendMask(sr, n, pitchTrack, segments, sharedOpts), schedule.cells, sr);
     let anyWet = false;
     for (let i = 0; i < blend.length; i++) { if (blend[i] > 1e-5) { anyWet = true; break; } }
     if (!anyWet) return channels.map((ch) => Float32Array.from(ch));
 
-    const schedule = buildGrainSchedule(sr, n, pitchTrack, segments, sharedOpts);
     const grains = schedule.grains;
     const winCache = makeWinCache();
     const blockFrames = Math.max(4096, opts.blockFrames || 32768);
@@ -1319,7 +1372,7 @@
         const out = outputs[c];
         for (let i = 0; i < blockLen; i++) {
           const globalI = blockStart + i;
-          const wet = norm[i] > 1e-6 ? acc[i] / norm[i] : 0;
+          const wet = acc[i] / Math.max(norm[i], NORM_FLOOR);
           const m = blend[globalI];
           out[globalI] = srcSignal[globalI] * (1 - m) + wet * m;
         }

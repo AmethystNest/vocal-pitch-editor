@@ -24,6 +24,25 @@ function lowFormantVoice(seed=20) {
   }
   return a;
 }
+// Glottal-pulse vowel through formant resonators; consecutive notes glide
+// into each other (legato), so edited note boundaries sit inside voicing.
+function legatoVoice(semis,base=196,noteSec=.45){
+  const N=Math.round(sr*noteSec*semis.length),src=new Float64Array(N);let phase=0;
+  for(let i=0;i<N;i++){
+    const k=Math.floor(i/(sr*noteSec)),t=i/sr-k*noteSec;
+    const prev=base*Math.pow(2,semis[Math.max(0,k-1)]/12),cur=base*Math.pow(2,semis[k]/12);
+    phase=(phase+prev*Math.pow(cur/prev,Math.min(1,t/.06))/sr)%1;
+    src[i]=phase<.4?.5-.5*Math.cos(Math.PI*phase/.4):phase<.55?Math.cos(Math.PI/2*(phase-.4)/.15):0;
+  }
+  const out=new Float64Array(N);
+  for(const [F,B,g] of [[730,80,1],[1090,90,.5],[2440,120,.25]]){
+    const R=Math.exp(-Math.PI*B/sr),a1=-2*R*Math.cos(2*Math.PI*F/sr),a2=R*R;let y1=0,y2=0;
+    for(let i=1;i<N;i++){const y=(src[i]-src[i-1])-a1*y1-a2*y2;y2=y1;y1=y;out[i]+=g*y;}
+  }
+  let peak=0;for(const v of out)peak=Math.max(peak,Math.abs(v));
+  return Float32Array.from(out,(v,i)=>.5*v/peak*Math.min(1,i/(sr*.02),(N-i)/(sr*.02)));
+}
+function maxCurvature(a,lo=2,hi=a.length){let m=0;for(let i=Math.max(2,lo);i<hi;i++)m=Math.max(m,Math.abs(a[i]-2*a[i-1]+a[i-2]));return m;}
 function median(pt) {const a=[]; for(let i=0;i<pt.f0s.length;i++) if(pt.voiced[i]&&pt.f0s[i]>0) a.push(pt.f0s[i]);a.sort((x,y)=>x-y);return a[a.length>>1];}
 function midiSpread(pt){const a=[];for(let i=0;i<pt.f0s.length;i++)if(pt.voiced[i]&&pt.f0s[i]>0)a.push(69+12*Math.log2(pt.f0s[i]/440));a.sort((x,y)=>x-y);if(a.length<8)return NaN;return a[Math.floor(a.length*.9)]-a[Math.floor(a.length*.1)];}
 function maxDiff(a,b){assert.equal(a.length,b.length);let m=0;for(let i=0;i<a.length;i++){assert(Number.isFinite(b[i]),`nonfinite sample ${i}`);m=Math.max(m,Math.abs(a[i]-b[i]));}return m;}
@@ -80,6 +99,67 @@ async function main(){
     if(dryPower/(end-start)>.01*.01)
       assert(wetPower/dryPower>=.25,`edited boundary dropout at ${t.toFixed(2)} s`);
   }
+  // Moving one note inside a legato phrase used to leave a few milliseconds
+  // of silence at each note boundary (the blend reached past the last grain)
+  // followed by a full-scale step: an audible click/crackle on every edit.
+  const phrase=legatoVoice([0,2,4,5,7]),phraseTrack=PE.yinPitchTrack(phrase,sr),phraseSegs=PE.segmentNotes(phraseTrack);
+  assert(phraseSegs.length>=4,`legato phrase segments ${phraseSegs.length}`);
+  const phraseCurv=maxCurvature(phrase);
+  for(const shift of [-12,-7,-2,2,7]){
+    for(const edits of [phraseSegs.map((s,k)=>k===2?{...s,shiftSemitones:shift}:{...s}),phraseSegs.map((s,k)=>({...s,shiftSemitones:k%2?shift:-shift/2}))]){
+      const out=PE.resynthesize([phrase],sr,phraseTrack,edits)[0];
+      const curv=maxCurvature(out);
+      assert(curv<=phraseCurv*3,`pitch edit ${shift} st click: curvature ${phraseCurv.toFixed(4)} -> ${curv.toFixed(4)}`);
+      // A silent run longer than 1 ms inside loud voicing is a dropout.
+      let run=0;
+      for(let i=Math.round(.03*sr);i<out.length-Math.round(.03*sr);i++){
+        run=Math.abs(out[i])<1e-3&&Math.abs(phrase[i-24])+Math.abs(phrase[i])+Math.abs(phrase[i+24])>.03?run+1:0;
+        assert(run<Math.round(sr*.001),`pitch edit ${shift} st hole at ${(i/sr).toFixed(3)} s`);
+      }
+    }
+  }
+  // The app sends segmentToPlain() copies (no durationSec etc.) to the
+  // renderer. Those must be corrected exactly like full segment objects;
+  // previously the edited note was rendered as silence.
+  const plainEdits=phraseSegs.map((s,k)=>({startFrame:s.startFrame,endFrame:s.endFrame,startTime:s.startTime,endTime:s.endTime,
+    shiftSemitones:k===2?2:0,fineCents:0,lineOffsets:null,autoCurve:false}));
+  const plainOut=PE.resynthesize([phrase],sr,phraseTrack,plainEdits)[0];
+  const fullOut=PE.resynthesize([phrase],sr,phraseTrack,phraseSegs.map((s,k)=>({...s,shiftSemitones:k===2?2:0})))[0];
+  assert(maxDiff(fullOut,plainOut)<1e-7,'plain app segments render differently from full segments');
+  const plainChunk=(await PE.resynthesizeChunked([phrase],sr,phraseTrack,plainEdits,{blockFrames:4096}))[0];
+  assert(maxDiff(fullOut,plainChunk)<1e-5,'plain app segments differ on the chunked iPhone path');
+  const plainSeg=phraseSegs[2],plainTrack=PE.yinPitchTrack(plainOut,sr),plainErr=[];
+  for(let i=0;i<plainTrack.times.length;i++){
+    const t=plainTrack.times[i];
+    if(t>plainSeg.startTime+.08&&t<plainSeg.endTime-.08&&phraseTrack.voiced[i])plainErr.push(plainTrack.voiced[i]?Math.abs(1200*Math.log2(plainTrack.f0s[i]/(phraseTrack.f0s[i]*Math.pow(2,2/12)))):1200);
+  }
+  plainErr.sort((a,b)=>a-b);
+  assert(plainErr.length>5&&plainErr[Math.floor(plainErr.length*.9)]<30,`plain app segment edit pitch p90 ${plainErr[Math.floor(plainErr.length*.9)]} cents`);
+  // An octave-down edit must actually sound an octave lower. Normalising by a
+  // near-zero overlap sum restored the original period between grains.
+  const octaveSeg=phraseSegs[2];
+  const octaveOut=PE.resynthesize([phrase],sr,phraseTrack,phraseSegs.map(s=>s===octaveSeg?{...s,shiftSemitones:-12}:{...s}))[0];
+  const octaveTrack=PE.yinPitchTrack(octaveOut,sr);const octaveErr=[];
+  for(let i=0;i<octaveTrack.times.length;i++){
+    const t=octaveTrack.times[i];
+    if(t>octaveSeg.startTime+.08&&t<octaveSeg.endTime-.08&&phraseTrack.voiced[i])octaveErr.push(octaveTrack.voiced[i]?Math.abs(1200*Math.log2(octaveTrack.f0s[i]/(phraseTrack.f0s[i]/2))):1200);
+  }
+  octaveErr.sort((a,b)=>a-b);
+  assert(octaveErr.length>5&&octaveErr[octaveErr.length>>1]<30,`octave-down edit pitch error ${octaveErr[octaveErr.length>>1]} cents`);
+  // iPhone long files analyse a 2x downsampled copy; analysis hop samples
+  // must not be reused as output-rate samples when building the wet mask.
+  const halfRate=Float32Array.from({length:phrase.length>>1},(_,i)=>(phrase[2*i]+phrase[2*i+1])/2);
+  const halfTrack=PE.yinPitchTrack(halfRate,sr/2,{frameSize:1024,hopSize:256}),halfSegs=PE.segmentNotes(halfTrack);
+  const halfSeg=halfSegs[Math.min(2,halfSegs.length-1)];
+  const halfOut=PE.resynthesize([phrase],sr,halfTrack,halfSegs.map(s=>s===halfSeg?{...s,shiftSemitones:3}:{...s}))[0];
+  const halfOutTrack=PE.yinPitchTrack(halfOut,sr);const halfErr=[];
+  for(let i=0;i<halfOutTrack.times.length;i++){
+    const t=halfOutTrack.times[i];
+    if(t>halfSeg.startTime+.08&&t<halfSeg.endTime-.08&&phraseTrack.voiced[i])halfErr.push(halfOutTrack.voiced[i]?Math.abs(1200*Math.log2(halfOutTrack.f0s[i]/(phraseTrack.f0s[i]*Math.pow(2,3/12)))):1200);
+  }
+  halfErr.sort((a,b)=>a-b);
+  assert(halfErr.length>5&&halfErr[Math.floor(halfErr.length*.9)]<30,`downsampled-analysis edit pitch p90 ${halfErr[Math.floor(halfErr.length*.9)]} cents`);
+  assert(maxCurvature(halfOut)<=phraseCurv*3,'downsampled-analysis edit click');
   // Consonant/breath-like unvoiced material inside an edited note must stay
   // sample-for-sample dry; pitch correction should touch only voiced frames.
   const mixed=voicedWithNoise();const mixedTrack=PE.yinPitchTrack(mixed,sr);const mixedSegs=PE.segmentNotes(mixedTrack);
