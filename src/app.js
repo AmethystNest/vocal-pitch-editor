@@ -2520,11 +2520,13 @@
       if (audioSessionId !== S.audioSessionId) return;
       // Keep rendered PCM authoritative; WebAudio AudioBuffer is a second
       // full-size PCM copy, so materialize it lazily on iPhone/mobile.
-      S.editedBuffer = null;
       S.audioRevision = Math.max(S.audioRevision, renderingRevision);
       if (wasPlaying) {
         if (!document.hidden && S.playing &&
             resumeGeneration === S.playbackGeneration) {
+          // Prepare the replacement while the old source continues. Keep the
+          // old AudioBuffer installed until this completes so tick() keeps
+          // the active source alive.
           await rebuildEditedBuffer();
           if (audioSessionId === S.audioSessionId && !document.hidden &&
               S.playing && resumeGeneration === S.playbackGeneration) {
@@ -2533,14 +2535,19 @@
             S.playStartOffsetSec = resumeAt;
             startPlayback(true);
           }
+        } else {
+          S.editedBuffer = null;
         }
-      } else if (!document.hidden && S.previewSegId != null && S.autoPreviewEnabled) {
+      } else {
+        S.editedBuffer = null;
+        if (!document.hidden && S.previewSegId != null && S.autoPreviewEnabled) {
         const previewGeneration = S.soloPreviewGeneration;
         const previewSegId = S.previewSegId;
         await rebuildEditedBuffer();
         if (audioSessionId === S.audioSessionId && !document.hidden &&
             previewGeneration === S.soloPreviewGeneration) {
           await playSegmentSolo(S.segments.find((seg) => seg.id === previewSegId));
+        }
         }
       }
       S.previewSegId = null;
