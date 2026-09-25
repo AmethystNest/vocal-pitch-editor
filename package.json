@@ -6,7 +6,8 @@
     "check": "node --check src/engine.js && node --check src/app.js && node --check src/worker.js && node --check sw.js",
     "serve": "npx serve .",
     "test:engine": "node tests/engine-smoke.js",
-    "qa": "npm run check && npm run test:engine && npm run test:regression",
+    "qa": "npm run check && npm run test:engine && npm run test:regression && npm run test:resynth-playback",
+    "test:resynth-playback": "node tests/resynth-playback-regression.js",
     "test:regression": "node tests/regression.js",
     "test:browser": "python tests/browser_e2e.py"
   }
