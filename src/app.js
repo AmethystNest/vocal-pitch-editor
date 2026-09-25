@@ -2500,7 +2500,6 @@
     const wasPlaying = S.playing;
     // Keep the current source playing while the replacement audio is rendered.
     // Its old AudioBuffer remains valid until the completed render is ready.
-    const resumeGeneration = S.playbackGeneration;
     try {
       if (S.pendingFullResynth) {
         S.pendingFullResynth = false;
@@ -2522,14 +2521,12 @@
       // full-size PCM copy, so materialize it lazily on iPhone/mobile.
       S.audioRevision = Math.max(S.audioRevision, renderingRevision);
       if (wasPlaying) {
-        if (!document.hidden && S.playing &&
-            resumeGeneration === S.playbackGeneration) {
+        if (!document.hidden && S.playing) {
           // Prepare the replacement while the old source continues. Keep the
           // old AudioBuffer installed until this completes so tick() keeps
           // the active source alive.
           await rebuildEditedBuffer();
-          if (audioSessionId === S.audioSessionId && !document.hidden &&
-              S.playing && resumeGeneration === S.playbackGeneration) {
+          if (audioSessionId === S.audioSessionId && !document.hidden && S.playing) {
             const resumeAt = getPlayheadTime();
             stopPlayback(true);
             S.playStartOffsetSec = resumeAt;
