@@ -8,6 +8,22 @@ global.requestAnimationFrame = callback => setImmediate(() => callback(Date.now(
 function sine(f, sec=1.2) { const a=new Float32Array(Math.round(sr*sec)); for(let i=0;i<a.length;i++) a[i]=.25*Math.sin(2*Math.PI*f*i/sr); return a; }
 function vibrato(base, depthCents=35, rate=5.5, sec=1.8) { const a=new Float32Array(Math.round(sr*sec)); let phase=0; for(let i=0;i<a.length;i++){const t=i/sr;const f=base*Math.pow(2,(depthCents*Math.sin(2*Math.PI*rate*t))/1200);phase+=2*Math.PI*f/sr;a[i]=.25*Math.sin(phase);} return a; }
 function voicedWithNoise(base=220, sec=1.8) { const a=new Float32Array(Math.round(sr*sec)); let seed=0x12345678; for(let i=0;i<a.length;i++){const t=i/sr;seed=(1664525*seed+1013904223)>>>0;const noise=((seed/0xffffffff)*2-1)*.18;const voiced=.24*Math.sin(2*Math.PI*base*t);a[i]=(t>.72&&t<.94)?noise:voiced;} return a; }
+function lowFormantVoice(seed=20) {
+  const rate=24000, a=new Float32Array(Math.round(rate*.8)), phases=[];
+  let phase=0;
+  for(let h=1;h<=12;h++){seed=(1664525*seed+1013904223)>>>0;phases.push(seed/4294967296*Math.PI*2);}
+  for(let i=0;i<a.length;i++){
+    const t=i/rate, f=80+2*Math.sin(2*Math.PI*3*t);
+    phase+=2*Math.PI*f/rate;
+    let v=0;
+    for(let h=1;h<=12;h++){
+      const formant=Math.exp(-Math.pow((h*f-650)/320,2))+.2*Math.exp(-Math.pow((h*f-1300)/500,2));
+      v+=formant*Math.sin(h*phase+phases[h-1]);
+    }
+    a[i]=.08*v*Math.min(1,t/.04,(.8-t)/.04);
+  }
+  return a;
+}
 function median(pt) {const a=[]; for(let i=0;i<pt.f0s.length;i++) if(pt.voiced[i]&&pt.f0s[i]>0) a.push(pt.f0s[i]);a.sort((x,y)=>x-y);return a[a.length>>1];}
 function midiSpread(pt){const a=[];for(let i=0;i<pt.f0s.length;i++)if(pt.voiced[i]&&pt.f0s[i]>0)a.push(69+12*Math.log2(pt.f0s[i]/440));a.sort((x,y)=>x-y);if(a.length<8)return NaN;return a[Math.floor(a.length*.9)]-a[Math.floor(a.length*.1)];}
 function maxDiff(a,b){assert.equal(a.length,b.length);let m=0;for(let i=0;i<a.length;i++){assert(Number.isFinite(b[i]),`nonfinite sample ${i}`);m=Math.max(m,Math.abs(a[i]-b[i]));}return m;}
@@ -31,6 +47,39 @@ async function main(){
   const vibOut=PE.resynthesize([vib],sr,vibTrack,vibEdited)[0];
   const spreadIn=midiSpread(vibTrack),spreadOut=midiSpread(PE.yinPitchTrack(vibOut,sr));
   assert(Number.isFinite(spreadIn)&&Number.isFinite(spreadOut)&&spreadOut/spreadIn>0.70&&spreadOut/spreadIn<1.35,`vibrato spread ${spreadIn} -> ${spreadOut}`);
+  // Voice-like harmonics exposed a brief near-silent hole after an upward edit.
+  // Check local energy, since whole-note RMS can hide a 10 ms dropout.
+  const lowVoice=lowFormantVoice(), lowRate=24000;
+  const lowTrack=PE.yinPitchTrack(lowVoice,lowRate);
+  const lowEdits=PE.segmentNotes(lowTrack).map(s=>({...s,shiftSemitones:5}));
+  assert(lowEdits.length>0,'no low voice segments');
+  const lowOut=PE.resynthesize([lowVoice],lowRate,lowTrack,lowEdits)[0];
+  const lowChunk=(await PE.resynthesizeChunked([lowVoice],lowRate,lowTrack,lowEdits,{blockFrames:4096}))[0];
+  assert(maxDiff(lowOut,lowChunk)<1e-5,'low voice chunked render differs');
+  assert(Math.abs(1200*Math.log2(median(PE.yinPitchTrack(lowOut,lowRate))/(80*Math.pow(2,5/12))))<100,
+    'low voice edit lost its target pitch');
+  for(let t=.1;t<.7;t+=.01){
+    const start=Math.round(t*lowRate),end=start+Math.round(.01*lowRate);
+    let dryPower=0,wetPower=0;
+    for(let i=start;i<end;i++){dryPower+=lowVoice[i]*lowVoice[i];wetPower+=lowOut[i]*lowOut[i];}
+    if(dryPower/(end-start)>.01*.01)
+      assert(wetPower/dryPower>=.25,`edited voice dropout at ${t.toFixed(2)} s`);
+  }
+  // A second phase layout cancels near a wet/dry boundary unless level is
+  // measured at a finer time scale than the transition itself.
+  const edgeVoice=lowFormantVoice(33);
+  const edgeTrack=PE.yinPitchTrack(edgeVoice,lowRate);
+  const edgeEdits=PE.segmentNotes(edgeTrack).map(s=>({...s,shiftSemitones:5}));
+  const edgeOut=PE.resynthesize([edgeVoice],lowRate,edgeTrack,edgeEdits)[0];
+  assert(Math.abs(1200*Math.log2(median(PE.yinPitchTrack(edgeOut,lowRate))/(80*Math.pow(2,5/12))))<100,
+    'boundary edit lost its target pitch');
+  for(let t=.1;t<.7;t+=.01){
+    const start=Math.round(t*lowRate),end=start+Math.round(.01*lowRate);
+    let dryPower=0,wetPower=0;
+    for(let i=start;i<end;i++){dryPower+=edgeVoice[i]*edgeVoice[i];wetPower+=edgeOut[i]*edgeOut[i];}
+    if(dryPower/(end-start)>.01*.01)
+      assert(wetPower/dryPower>=.25,`edited boundary dropout at ${t.toFixed(2)} s`);
+  }
   // Consonant/breath-like unvoiced material inside an edited note must stay
   // sample-for-sample dry; pitch correction should touch only voiced frames.
   const mixed=voicedWithNoise();const mixedTrack=PE.yinPitchTrack(mixed,sr);const mixedSegs=PE.segmentNotes(mixedTrack);
@@ -54,6 +103,14 @@ async function main(){
   const stereoOut=PE.resynthesize(stereoIn,sr,track,edited);let stereoError=0;
   for(let i=0;i<stereoOut[0].length;i++)stereoError=Math.max(stereoError,Math.abs(stereoOut[1][i]-stereoOut[0][i]*.5));
   assert(stereoError<1e-7,`stereo image drift ${stereoError}`);
+  // Opposite-polarity stereo must not cancel the pitch-mark guide and
+  // silently disable correction. Both channels must remain phase-opposed.
+  const opposite=PE.resynthesize([input,Float32Array.from(input,x=>-x)],sr,track,edited);
+  const oppositePitch=median(PE.yinPitchTrack(opposite[0],sr));
+  assert(Math.abs(1200*Math.log2(oppositePitch/(220*Math.pow(2,3/12))))<30,`opposite stereo pitch ${oppositePitch}`);
+  let oppositeError=0;
+  for(let i=0;i<opposite[0].length;i++)oppositeError=Math.max(oppositeError,Math.abs(opposite[0][i]+opposite[1][i]));
+  assert(oppositeError<1e-7,`opposite stereo phase drift ${oppositeError}`);
   // Reference matching is contour-based, so a guide with different timing
   // and register should still align to the corresponding phrase.
   const ref=sine(330,1.5),refTrack=PE.yinPitchTrack(ref,sr);

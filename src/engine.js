@@ -859,11 +859,16 @@
   function makePsolaGuide(channels) {
     const n = channels[0].length;
     const g = new Float32Array(n);
-    const inv = 1 / Math.max(1, channels.length);
-    for (let c = 0; c < channels.length; c++) {
-      const ch = channels[c];
-      for (let i = 0; i < n; i++) g[i] += ch[i] * inv;
+    // A mono average can cancel almost completely for phase-inverted stereo.
+    // Use the most energetic channel to locate shared pitch marks instead;
+    // the resulting schedule is still applied identically to every channel.
+    let best = channels[0], bestEnergy = -1;
+    for (const ch of channels) {
+      let energy = 0;
+      for (let i = 0; i < n; i += 16) energy += ch[i] * ch[i];
+      if (energy > bestEnergy) { bestEnergy = energy; best = ch; }
     }
+    g.set(best);
     return g;
   }
 
@@ -1067,7 +1072,11 @@
             const m = src.mark;
             const srcCenter = m.sample;
             const periodSamples = Math.max(8, m.periodSamples);
-            const half = periodSamples;
+            // Wide source-period grains overlap destructively when synthesis
+            // marks are closer together than source marks (upward shifts).
+            // Bound the window by the target period to keep adjacent grains
+            // from cancelling a voiced cycle and creating a short dropout.
+            const half = Math.max(8, Math.round(Math.min(periodSamples, pOut * sr * 0.84)));
             const start = Math.max(0, srcCenter - half);
             const end = Math.min(n, srcCenter + half);
             if (end - start < 8) continue;
@@ -1176,6 +1185,48 @@
     return smoothed;
   }
 
+  // PSOLA can lower a vowel's level even when its pitch remains correct,
+  // especially when neighboring grains overlap at a new period. Restore only
+  // clearly attenuated edited regions using a shared, slowly changing gain.
+  // The same gain on every channel preserves the stereo image, and the sparse
+  // frame table avoids another full-length audio buffer on mobile devices.
+  function restoreEditedLevel(channels, outputs, blend, sr) {
+    const n = outputs[0].length;
+    // A 20 ms window hides the short cancellation at a wet/dry boundary.
+    // Use 5 ms frames so a single attenuated transition can be restored.
+    const hop = Math.max(1, Math.round(sr * 0.005));
+    const radius = hop;
+    let guide = 0, bestEnergy = -1;
+    for (let c = 0; c < channels.length; c++) {
+      let energy = 0;
+      for (let i = 0; i < n; i += 16) energy += channels[c][i] * channels[c][i];
+      if (energy > bestEnergy) { bestEnergy = energy; guide = c; }
+    }
+    const dry = channels[guide], wet = outputs[guide];
+    const gains = new Float32Array(Math.ceil(n / hop) + 1);
+    gains.fill(1);
+    for (let frame = 0; frame < gains.length; frame++) {
+      const center = Math.min(n - 1, frame * hop);
+      if (blend[center] < 0.05) continue;
+      const lo = Math.max(0, center - radius), hi = Math.min(n, center + radius);
+      let dryPower = 0, wetPower = 0, peak = 0;
+      for (let i = lo; i < hi; i++) {
+        dryPower += dry[i] * dry[i];
+        wetPower += wet[i] * wet[i];
+        peak = Math.max(peak, Math.abs(wet[i]));
+      }
+      if (dryPower < (hi - lo) * 0.002 * 0.002 || wetPower >= dryPower * 0.49) continue;
+      gains[frame] = Math.max(1, Math.min(2.5, 0.85 * Math.sqrt(dryPower / Math.max(wetPower, 1e-12)), 0.98 / Math.max(peak, 1e-9)));
+    }
+    for (let i = 0; i < n; i++) {
+      if (blend[i] < 0.05) continue;
+      const frame = Math.floor(i / hop), frac = (i - frame * hop) / hop;
+      const gain = (gains[frame] * (1 - frac) + gains[frame + 1] * frac - 1) * blend[i] + 1;
+      for (let c = 0; c < outputs.length; c++) outputs[c][i] *= gain;
+    }
+    return outputs;
+  }
+
   // High-level: resynthesize one or more channels given the current
   // segment edits. The PSOLA render is blended only into edited voiced areas;
   // everywhere else remains sample-for-sample original.
@@ -1195,7 +1246,7 @@
 
     const schedule = buildGrainSchedule(sr, n, pitchTrack, segments, Object.assign({}, opts || {}, { guideSignal }));
     const winCache = makeWinCache();
-    return channels.map((ch) => {
+    const outputs = channels.map((ch) => {
       const wet = applyGrainSchedule(ch, schedule, winCache);
       const out = new Float32Array(Math.min(n, wet.length));
       for (let i = 0; i < out.length; i++) {
@@ -1204,6 +1255,7 @@
       }
       return out;
     });
+    return restoreEditedLevel(channels, outputs, blend, sr);
   }
 
 
@@ -1276,7 +1328,7 @@
       // Safari gets a paint/input opportunity without changing DSP boundaries.
       await new Promise(requestAnimationFrame);
     }
-    return outputs;
+    return restoreEditedLevel(channels, outputs, blend, sr);
   }
 
   // ============================================================
