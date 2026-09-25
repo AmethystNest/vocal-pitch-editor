@@ -2,6 +2,14 @@
 
 ## CURRENT STATE — 2026-09-25 (current local measurements)
 
+### Current development cycle — analysis progress, PWA update notice, single-file build (2026-09-25, cloud session)
+
+- **Analysis progress:** `yinPitchTrack` accepts optional `opts.onProgress` (≤~100 calls). The worker posts `{type:'progress'}` only when the request carries `reportProgress` (so an old page talking to a new worker is unaffected). The loading overlay shows `… N%` and a progress bar (indeterminate while decoding; `role=progressbar` with `aria-valuenow`; reduced-motion respected). Main-thread fallback (no Worker) has no percentage. Reference-guide analysis still uses its toast without percent.
+- **PWA update notice:** if the page was already controlled by a service worker and `controllerchange` fires (sw.js uses skipWaiting + claim), a banner offers 更新/後で. Never reloads automatically; with audio loaded, 更新 asks for confirmation. Resuming an installed PWA triggers `registration.update()` at most every 10 min.
+- **Single-file build:** `npm run build:standalone` → `dist/pitch-editor-standalone.html` (git-ignored). Engine/app inlined, Worker created from a Blob (`window.PITCH_EDITOR_WORKER_URL`), manifest/SW omitted, icon inlined.
+- **Measured:** `npm run qa` PASS (new worker progress checks), solo/playback background regressions PASS. Real headless Chromium (Playwright 1.56, scripts not committed): standalone via `file://` used the Blob worker, progress 0→100% monotonic (96 updates on a 20 s file), edit + export correct (+2 st note), no page errors; HTTPS service-worker run: no banner on first install, banner after a new sw.js, 後で keeps audio, cancelled confirm keeps audio, accepted confirm reloads onto the new cache. 390 px screenshots checked. **Not verified:** iPhone Safari / installed PWA update flow, and opening the standalone file on iPhone (Files app preview is expected not to run it).
+- PWA cache bumped to `v56-analysis-progress-update-notice`.
+
 ### Current development cycle — edited note collapsed to silence (2026-09-25, cloud session)
 
 - **User-reported defect:** moving a note with pitch correction destroyed its sound.

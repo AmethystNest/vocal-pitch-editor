@@ -214,8 +214,15 @@ async function main(){
   context.importScripts=(path)=>assert.equal(path,'./engine.js');
   vm.runInNewContext(fs.readFileSync(require.resolve('../src/worker.js'),'utf8'),context,{filename:'worker.js'});
   context.onmessage({data:{type:'analyze',id:12,signal:sine(220,.4),sr}});
+  assert.equal(messages.length,1,'worker sent progress without opting in');
   assert.equal(messages[0].type,'analyzed');assert.equal(messages[0].id,12);
   assert(messages[0].segments.length>0);
+  // Analysis progress: opt-in worker messages, monotonic fractions in [0,1).
+  context.onmessage({data:{type:'analyze',id:13,signal:sine(220,1.2),sr,reportProgress:true}});
+  const progress=messages.slice(1,-1);
+  assert(progress.length>=10&&progress.every(m=>m.type==='progress'&&m.id===13),'worker analysis progress missing');
+  assert(progress.every((m,i)=>m.fraction>=0&&m.fraction<1&&(i===0||m.fraction>progress[i-1].fraction)),'analysis progress is not monotonic');
+  assert.equal(messages[messages.length-1].type,'analyzed');assert.equal(messages[messages.length-1].id,13);
   console.log(`regression PASS: edit→F0 ${outputPitch.toFixed(2)} Hz; vibrato spread ${spreadIn.toFixed(3)}→${spreadOut.toFixed(3)} st; unvoiced max Δ ${noiseDelta}; boundary step ${sourceStep.toFixed(4)}→${outputStep.toFixed(4)}; stereo drift ${stereoError}; reference alignment; standard/chunked max Δ ${difference}; stereo WAV header; worker analyze`);
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

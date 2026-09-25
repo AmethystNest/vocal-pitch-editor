@@ -12,11 +12,16 @@
 
   function createAudioWorker() {
     if (worker) return worker;
-    const nextWorker = new Worker('./src/worker.js');
+    // The single-file build supplies an inline (Blob) worker URL.
+    const nextWorker = new Worker(window.PITCH_EDITOR_WORKER_URL || './src/worker.js');
     nextWorker.onmessage = (e) => {
       const msg = e.data;
       const cb = pending.get(msg.id);
       if (!cb) return;
+      if (msg.type === 'progress') {
+        if (cb.onProgress) { try { cb.onProgress(msg.fraction); } catch (err) {} }
+        return;
+      }
       pending.delete(msg.id);
       if (msg.type === 'error') cb.reject(new Error(msg.message));
       else cb.resolve(msg);
@@ -82,7 +87,7 @@
     });
   }
 
-  function workerCall(payload, transfer) {
+  function workerCall(payload, transfer, onProgress) {
     // iPhone Safari reliability path:
     // local per-note resynthesis is only a short slice, so avoiding Blob Worker
     // transfer here is cheap and prevents a class of stale-buffer failures.
@@ -96,9 +101,9 @@
     const activeWorker = worker;
     const id = ++msgId;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      pending.set(id, { resolve, reject, onProgress });
       try {
-        activeWorker.postMessage(Object.assign({ id }, payload), transfer || []);
+        activeWorker.postMessage(Object.assign({ id, reportProgress: !!onProgress }, payload), transfer || []);
       } catch (err) {
         pending.delete(id);
         try { activeWorker.terminate(); } catch (e) {}
@@ -228,6 +233,24 @@
     toast.style.display = 'block';
     clearTimeout(toastMsg._t);
     toastMsg._t = setTimeout(() => { toast.style.display = 'none'; }, ms || 1600);
+  }
+
+  // Loading overlay progress. fraction null = stage without measurable
+  // progress (decoding), shown as an indeterminate bar.
+  const loadingProgress = $('loadingProgress'), loadingProgressFill = $('loadingProgressFill');
+  function setLoadingProgress(fraction) {
+    if (!loadingProgress || !loadingProgressFill) return;
+    loadingProgress.hidden = false;
+    if (fraction == null) {
+      loadingProgress.classList.add('indeterminate');
+      loadingProgress.removeAttribute('aria-valuenow');
+      loadingProgressFill.style.width = '';
+      return;
+    }
+    const pct = Math.max(0, Math.min(100, Math.round(fraction * 100)));
+    loadingProgress.classList.remove('indeterminate');
+    loadingProgress.setAttribute('aria-valuenow', String(pct));
+    loadingProgressFill.style.width = pct + '%';
   }
 
   function ensureAudioContext() {
@@ -582,9 +605,47 @@
   // Register a lightweight offline shell. Navigation stays network-first,
   // so Netlify updates are not masked by a stale cached index.html.
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    // A page already controlled by a worker is running an installed version.
+    // sw.js activates a new release immediately (skipWaiting + claim), so a
+    // controller change means this page's code is now outdated. Never reload
+    // automatically: that would discard the user's audio and edits.
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController) showUpdateNotice();
+    });
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('SW registration failed', err));
+      navigator.serviceWorker.register('./sw.js').then((registration) => {
+        // An installed iPhone PWA is often resumed rather than relaunched,
+        // which skips the browser's navigation-time update check.
+        let lastCheck = Date.now();
+        document.addEventListener('visibilitychange', () => {
+          if (document.hidden || Date.now() - lastCheck < 10 * 60 * 1000) return;
+          lastCheck = Date.now();
+          registration.update().catch(() => {});
+        });
+      }).catch((err) => console.warn('SW registration failed', err));
     }, { once: true });
+  }
+
+  function showUpdateNotice() {
+    const banner = $('updateBanner');
+    if (!banner || !banner.hidden) return;
+    const text = $('updateBannerText');
+    if (text) {
+      text.textContent = S.origChannels
+        ? '新しいバージョンがあります。更新すると編集中の内容は失われます。'
+        : '新しいバージョンがあります。';
+    }
+    banner.hidden = false;
+  }
+  if ($('updateReloadBtn')) {
+    $('updateReloadBtn').addEventListener('click', () => {
+      if (S.origChannels && !window.confirm('再読み込みすると、読み込んだ音源と編集内容は失われます。更新しますか？')) return;
+      location.reload();
+    });
+  }
+  if ($('updateLaterBtn')) {
+    $('updateLaterBtn').addEventListener('click', () => { $('updateBanner').hidden = true; });
   }
 
   function releaseAudioMemory() {
@@ -717,6 +778,7 @@
     S.fileBaseName = file.name.replace(/\.[^/.]+$/, '');
     loadingScreen.style.display = 'flex';
     loadingStatus.textContent = '読み込み中...';
+    setLoadingProgress(null);
     setControlsEnabled(false);
     try {
       const decoded = await decodeAudioFile(file);
@@ -751,14 +813,26 @@
         S.origChannels.push(IS_IOS ? channel : Float32Array.from(channel));
       }
 
-      loadingStatus.textContent = analysis.downsampled
-        ? 'ピッチを省メモリ解析中...(iPhone最適化)'
-        : 'ピッチを解析中...(曲の長さにより数十秒かかることがあります)';
+      const analyzeLabel = analysis.downsampled ? 'ピッチを省メモリ解析中(iPhone最適化)' : 'ピッチを解析中';
+      loadingStatus.textContent = `${analyzeLabel}... 0%`;
+      setLoadingProgress(0);
       await new Promise(r => setTimeout(r, 20));
       const analyzeT0 = performance.now();
-      const analyzed = await workerCall({ type: 'analyze', signal: S.monoSignal, sr: analysis.sr, opts: yinOptsForSampleRate(analysis.sr) });
+      const analyzed = await workerCall(
+        { type: 'analyze', signal: S.monoSignal, sr: analysis.sr, opts: yinOptsForSampleRate(analysis.sr) },
+        undefined,
+        (fraction) => {
+          if (audioSessionId !== S.audioSessionId) return;
+          // Note segmentation after F0 tracking is quick; keep the last 2%.
+          const pct = Math.min(98, Math.round(fraction * 98));
+          loadingStatus.textContent = `${analyzeLabel}... ${pct}%`;
+          setLoadingProgress(pct / 100);
+        }
+      );
       if (audioSessionId !== S.audioSessionId) return;
       console.info(`[PitchEditor] F0+note analysis ${(performance.now() - analyzeT0).toFixed(0)} ms`);
+      loadingStatus.textContent = `${analyzeLabel}... 100%`;
+      setLoadingProgress(1);
       S.pitchTrack = analyzed.pitchTrack;
       S.segments = analyzed.segments;
       updateAccessibleNoteNav();

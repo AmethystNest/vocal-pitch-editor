@@ -4,7 +4,11 @@ self.onmessage = function (e) {
   const msg = e.data;
   try {
     if (msg.type === 'analyze') {
-      const pitchTrack = PitchEngine.yinPitchTrack(msg.signal, msg.sr, msg.opts || undefined);
+      // Progress messages are opt-in so a page from an older release that
+      // talks to this worker never mistakes one for the final result.
+      const opts = Object.assign({}, msg.opts || {});
+      if (msg.reportProgress) opts.onProgress = (fraction) => self.postMessage({ type: 'progress', id: msg.id, fraction });
+      const pitchTrack = PitchEngine.yinPitchTrack(msg.signal, msg.sr, opts);
       const segments = PitchEngine.segmentNotes(pitchTrack);
       self.postMessage({ type: 'analyzed', id: msg.id, pitchTrack, segments });
     } else if (msg.type === 'resynth') {

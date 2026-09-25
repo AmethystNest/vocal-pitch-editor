@@ -134,7 +134,11 @@
     const energy = new Float64Array(frameSize + 1);
     const df = new Float64Array(maxLag);
     const cmndf = new Float64Array(maxLag);
+    // Optional progress reporting (fraction 0..1), at most ~100 calls.
+    const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+    const progressStep = Math.max(1, Math.ceil(nFrames / 100));
     for (let i = 0; i < nFrames; i++) {
+      if (onProgress && i % progressStep === 0) onProgress(i / nFrames);
       const start = i * hopSize;
       times[i] = (start + frameSize / 2) / sr;
       let maxAbs = 0;

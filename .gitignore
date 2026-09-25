@@ -1,3 +1,6 @@
 # Generated Python bytecode from browser regression tests.
 __pycache__/
 *.py[cod]
+
+# Generated single-file build (npm run build:standalone).
+dist/

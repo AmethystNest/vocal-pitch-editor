@@ -9,6 +9,7 @@
     "qa": "npm run check && npm run test:engine && npm run test:regression && npm run test:resynth-playback",
     "test:resynth-playback": "node tests/resynth-playback-regression.js",
     "test:regression": "node tests/regression.js",
-    "test:browser": "python tests/browser_e2e.py"
+    "test:browser": "python tests/browser_e2e.py",
+    "build:standalone": "node tools/build-standalone.js"
   }
 }
