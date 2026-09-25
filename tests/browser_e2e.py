@@ -601,10 +601,14 @@ def main():
             landscape_inspector=page.locator('#inspector').bounding_box()
             inspector_style=page.locator('#inspector').evaluate("el => ({maxHeight:getComputedStyle(el).maxHeight,clientHeight:el.clientHeight,scrollHeight:el.scrollHeight,rollTop:document.querySelector('#rollWrap').getBoundingClientRect().top})")
             assert landscape_inspector and landscape_inspector['y']>=0 and landscape_inspector['y']+landscape_inspector['height']<=landscape_metrics['height'], f'inspector escaped the landscape viewport: {landscape_inspector}; {landscape_metrics}; {inspector_style}'
-            landscape_adjustment=page.locator('#inspector [data-d="10"]')
-            landscape_adjustment.scroll_into_view_if_needed()
-            adjustment_box=landscape_adjustment.bounding_box()
-            assert adjustment_box and adjustment_box['y']>=0 and adjustment_box['y']+adjustment_box['height']<=landscape_metrics['height'], f'pitch adjustment is unreachable in landscape: {adjustment_box}'
+            for step in ('10','50'):
+                landscape_step=page.locator(f'#inspector [data-d="{step}"]')
+                landscape_step.scroll_into_view_if_needed()
+                adjustment_box=landscape_step.bounding_box()
+                assert adjustment_box and adjustment_box['y']>=0 and adjustment_box['y']+adjustment_box['height']<=landscape_metrics['height'], f'pitch adjustment {step} is unreachable in landscape: {adjustment_box}'
+            # +50 cents moves 220 Hz to 226.4 Hz, several zero-crossing
+            # resolution steps away from the source (a +10 cent edit is not).
+            landscape_adjustment=page.locator('#inspector [data-d="50"]')
             initial_offset=page.locator('#inspOffset').inner_text()
             landscape_adjustment.tap()
             page.wait_for_function("document.querySelector('#undoBtn').disabled === false",timeout=5000)
@@ -628,7 +632,10 @@ def main():
             lo=int(edited_rate*0.25);hi=min(len(edited_pcm)-1,int(edited_rate*1.1))
             crossings=sum(1 for i in range(lo,hi) if edited_pcm[i]<=0<edited_pcm[i+1])
             edited_hz=crossings*edited_rate/(hi-lo)
-            assert edited_hz>235, f'touch pitch edit did not reach exported PCM: {edited_hz:.1f} Hz'
+            # Require the corrected pitch itself. A lower bound alone also
+            # accepted a silenced note, whose dither noise crosses zero often.
+            expected_hz=220*2**(50/1200)
+            assert abs(edited_hz-expected_hz)<2.5, f'touch pitch edit did not reach exported PCM: {edited_hz:.1f} Hz (expected {expected_hz:.1f} Hz)'
             page.locator('#undoBtn').tap()
             page.wait_for_function("document.querySelector('#undoBtn').disabled === true",timeout=5000)
 
