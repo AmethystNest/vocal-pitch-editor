@@ -2498,10 +2498,8 @@
     const audioSessionId = S.audioSessionId;
     const renderingRevision = S.editRevision;
     const wasPlaying = S.playing;
-    const resumeAt = getPlayheadTime();
-    if (wasPlaying) stopPlayback(true);
-    // Only this render's own pause may be resumed. A later stop, seek,
-    // background transition or fresh playback supersedes that intent.
+    // Keep the current source playing while the replacement audio is rendered.
+    // Its old AudioBuffer remains valid until the completed render is ready.
     const resumeGeneration = S.playbackGeneration;
     try {
       if (S.pendingFullResynth) {
@@ -2525,10 +2523,13 @@
       S.editedBuffer = null;
       S.audioRevision = Math.max(S.audioRevision, renderingRevision);
       if (wasPlaying) {
-        if (!document.hidden && resumeGeneration === S.playbackGeneration) {
+        if (!document.hidden && S.playing &&
+            resumeGeneration === S.playbackGeneration) {
           await rebuildEditedBuffer();
           if (audioSessionId === S.audioSessionId && !document.hidden &&
-              resumeGeneration === S.playbackGeneration) {
+              S.playing && resumeGeneration === S.playbackGeneration) {
+            const resumeAt = getPlayheadTime();
+            stopPlayback(true);
             S.playStartOffsetSec = resumeAt;
             startPlayback(true);
           }
