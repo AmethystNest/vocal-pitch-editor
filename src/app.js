@@ -186,6 +186,9 @@
 
     playing: false,
     playSource: null,
+    playGain: null,
+    fadingPlaySource: null,
+    fadingPlayGain: null,
     playStartCtxTime: 0,
     playStartOffsetSec: 0,
 
@@ -2527,10 +2530,7 @@
           // the active source alive.
           await rebuildEditedBuffer();
           if (audioSessionId === S.audioSessionId && !document.hidden && S.playing) {
-            const resumeAt = getPlayheadTime();
-            stopPlayback(true);
-            S.playStartOffsetSec = resumeAt;
-            startPlayback(true);
+            swapPlayingBuffer();
           }
         } else {
           S.editedBuffer = null;
@@ -2736,6 +2736,75 @@
     render();
   }
 
+  // Stop an outgoing source left over from a previous 12 ms buffer handoff.
+  function stopFadingPlayback() {
+    const src = S.fadingPlaySource, gain = S.fadingPlayGain;
+    S.fadingPlaySource = null;
+    S.fadingPlayGain = null;
+    if (src) {
+      src.onended = null;
+      try { src.stop(); } catch (e) {}
+      try { src.disconnect(); } catch (e) {}
+    }
+    if (gain) { try { gain.disconnect(); } catch (e) {} }
+  }
+
+  // Replace the playing AudioBuffer without passing through startPlayback's
+  // asynchronous AudioContext unlock. Start the new source before the old
+  // source fades out, so even a delayed Safari audio task cannot make a gap.
+  function swapPlayingBuffer() {
+    const oldSource = S.playSource, oldGain = S.playGain;
+    if (!S.playing || !oldSource || !S.editedBuffer || !S.audioCtx) return;
+    const ac = S.audioCtx;
+    const now = ac.currentTime;
+    const fadeSec = 0.012;
+    const offset = Math.max(0, Math.min(getPlayheadTime(), S.editedBuffer.duration - 0.001));
+
+    stopFadingPlayback();
+    const src = ac.createBufferSource();
+    const gain = ac.createGain();
+    src.buffer = S.editedBuffer;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(1, now + fadeSec);
+    src.connect(gain);
+    gain.connect(ac.destination);
+    src.start(now, offset);
+
+    oldSource.onended = null;
+    if (oldGain) {
+      oldGain.gain.cancelScheduledValues(now);
+      oldGain.gain.setValueAtTime(1, now);
+      oldGain.gain.linearRampToValueAtTime(0, now + fadeSec);
+    }
+    S.fadingPlaySource = oldSource;
+    S.fadingPlayGain = oldGain;
+    oldSource.onended = () => {
+      try { oldSource.disconnect(); } catch (e) {}
+      if (oldGain) { try { oldGain.disconnect(); } catch (e) {} }
+      if (S.fadingPlaySource === oldSource) {
+        S.fadingPlaySource = null;
+        S.fadingPlayGain = null;
+      }
+    };
+    try { oldSource.stop(now + fadeSec + 0.002); } catch (e) { oldSource.onended(); }
+
+    S.playSource = src;
+    S.playGain = gain;
+    S.playStartOffsetSec = offset;
+    S.playStartCtxTime = now;
+    S.playbackGeneration = (S.playbackGeneration || 0) + 1;
+    src.onended = () => {
+      try { src.disconnect(); } catch (e) {}
+      try { gain.disconnect(); } catch (e) {}
+      if (S.playSource === src) {
+        S.playSource = null;
+        S.playGain = null;
+        S.playing = false;
+        $('playBtn').innerHTML = '▶<span class="toolLabel">再生</span>';
+      }
+    };
+  }
+
   async function startPlayback(skipFlush = false) {
     if (!S.origChannels) return;
     const generation = S.playbackGeneration = (S.playbackGeneration || 0) + 1;
@@ -2760,12 +2829,24 @@
     if (!S.editedBuffer) return;
 
     const src = S.audioCtx.createBufferSource();
+    const gain = S.audioCtx.createGain();
     src.buffer = S.editedBuffer;
-    src.connect(S.audioCtx.destination);
+    src.connect(gain);
+    gain.connect(S.audioCtx.destination);
     const offset = Math.min(S.playStartOffsetSec, S.editedBuffer.duration - 0.001);
     src.start(0, Math.max(0, offset));
-    src.onended = () => { if (S.playSource === src) { S.playing = false; $('playBtn').innerHTML = '▶<span class="toolLabel">再生</span>'; } };
+    src.onended = () => {
+      try { src.disconnect(); } catch (e) {}
+      try { gain.disconnect(); } catch (e) {}
+      if (S.playSource === src) {
+        S.playSource = null;
+        S.playGain = null;
+        S.playing = false;
+        $('playBtn').innerHTML = '▶<span class="toolLabel">再生</span>';
+      }
+    };
     S.playSource = src;
+    S.playGain = gain;
     S.playStartCtxTime = S.audioCtx.currentTime;
     S.playing = true;
     $('playBtn').innerHTML = '⏸<span class="toolLabel">停止</span>';
@@ -2773,12 +2854,15 @@
   }
   function stopPlayback(keepOffset) {
     S.playbackGeneration = (S.playbackGeneration || 0) + 1;
+    stopFadingPlayback();
+    if (S.playing) S.playStartOffsetSec = getPlayheadTime();
     if (S.playSource) {
-      try { S.playSource.onended = null; S.playSource.stop(); } catch (e) {}
+      S.playSource.onended = null;
+      try { S.playSource.stop(); } catch (e) {}
+      try { S.playSource.disconnect(); } catch (e) {}
       S.playSource = null;
     }
-    if (S.playing && !keepOffset) S.playStartOffsetSec = getPlayheadTime();
-    else if (S.playing) S.playStartOffsetSec = getPlayheadTime();
+    if (S.playGain) { try { S.playGain.disconnect(); } catch (e) {} S.playGain = null; }
     S.playing = false;
     $('playBtn').innerHTML = '▶<span class="toolLabel">再生</span>';
   }
