@@ -180,6 +180,31 @@
       }
       if (tau === -1) continue;
 
+      // A vowel whose formant sits near 2x f0 (a strong second harmonic --
+      // observed on some "e"/"o" shapes) can make YIN's first below-threshold
+      // dip land at half the true period, reporting exactly an octave too
+      // high. A genuine period also repeats at its own integer multiples, so
+      // this checks for a deeper cmndf minimum near double the candidate.
+      // CMNDF's cumulative normalisation also makes it naturally drift lower
+      // at larger lags on ANY clean, confidently periodic tone, so a deeper
+      // multiple alone is not enough evidence -- that happens even at the
+      // correct pitch. Only override a MARGINAL first pick (its own cmndf
+      // barely below the detection threshold) when the doubled candidate is
+      // decisively strong in both absolute and relative terms; a first pick
+      // that is already a clean, confident match is left alone. Checked
+      // twice to also catch a rarer two-octave error.
+      for (let pass = 0; pass < 2; pass++) {
+        if (cmndf[tau] < threshold * 0.5) break;
+        const target = tau * 2;
+        if (target >= maxLag - 1) break;
+        const lo = Math.max(minLag, Math.round(target * 0.94));
+        const hi = Math.min(maxLag - 2, Math.round(target * 1.06));
+        let bestJ = -1, bestVal = Infinity;
+        for (let j = lo; j <= hi; j++) if (cmndf[j] < bestVal) { bestVal = cmndf[j]; bestJ = j; }
+        if (bestJ < 0 || bestVal > 0.05 || bestVal > cmndf[tau] * 0.3) break;
+        tau = bestJ;
+      }
+
       clarity[i] = 1 - cmndf[tau];
       let tauRefined = tau;
       if (tau > 0 && tau < maxLag - 1) {

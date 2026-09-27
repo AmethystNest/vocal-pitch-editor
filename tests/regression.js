@@ -24,6 +24,30 @@ function lowFormantVoice(seed=20) {
   }
   return a;
 }
+// A glottal-pulse vowel with a single strong formant. When that formant sits
+// at (about) twice f0, its energy can make YIN report exactly an octave too
+// high (observed on synthetic "e"/"o"-like vowels around C4).
+function glottalVowel(f0, F1, B1=90, sec=.9, seed=5) {
+  const N=Math.round(sr*sec), src=new Float64Array(N);
+  let phase=0, seedState=seed;
+  const rand=()=>{seedState=(1664525*seedState+1013904223)>>>0; return seedState/4294967296;};
+  for(let i=0;i<N;i++){
+    const t=i/sr;
+    phase+=f0/sr; if(phase>=1) phase-=1;
+    const op=.42, cl=.16; let gp;
+    if(phase<op) gp=.5-.5*Math.cos(Math.PI*phase/op);
+    else if(phase<op+cl) gp=Math.cos(Math.PI/2*(phase-op)/cl);
+    else gp=0;
+    const env=Math.min(1,t/.03,(sec-t)/.03);
+    src[i]=gp*env+.01*(rand()-.5)*env;
+  }
+  const d=new Float64Array(N); for(let n=1;n<N;n++) d[n]=src[n]-src[n-1];
+  const R=Math.exp(-Math.PI*B1/sr), a1=-2*R*Math.cos(2*Math.PI*F1/sr), a2=R*R;
+  let y1=0, y2=0; const out=new Float64Array(N);
+  for(let n=0;n<N;n++){ const y=d[n]-a1*y1-a2*y2; y2=y1; y1=y; out[n]=y; }
+  let pk=0; for(const v of out) pk=Math.max(pk,Math.abs(v));
+  return Float32Array.from(out, v=>.5*v/pk);
+}
 // Glottal-pulse vowel through formant resonators; consecutive notes glide
 // into each other (legato), so edited note boundaries sit inside voicing.
 function legatoVoice(semis,base=196,noteSec=.45){
@@ -191,6 +215,25 @@ async function main(){
   }
   octaveErr.sort((a,b)=>a-b);
   assert(octaveErr.length>5&&octaveErr[octaveErr.length>>1]<30,`octave-down edit pitch error ${octaveErr[octaveErr.length>>1]} cents`);
+  // A vowel whose only strong formant sits at ~2x f0 (an "e"/"o"-like shape
+  // around C4) previously made YIN report exactly an octave too high on
+  // every frame -- the note displayed, corrected and exported wrong.
+  const secondHarmonicVowel=glottalVowel(261.63,523.26);
+  const shTrack=PE.yinPitchTrack(secondHarmonicVowel,sr,{frameSize:2048,hopSize:512,fmin:70,fmax:1000,threshold:0.15});
+  const shVoiced=[]; for(let i=0;i<shTrack.f0s.length;i++) if(shTrack.voiced[i]) shVoiced.push(shTrack.f0s[i]);
+  shVoiced.sort((a,b)=>a-b);
+  assert(shVoiced.length>10,'formant-dominant vowel produced too few voiced frames');
+  const shMedian=shVoiced[shVoiced.length>>1];
+  assert(Math.abs(1200*Math.log2(shMedian/261.63))<50,`formant-dominant vowel detected an octave error: ${shMedian.toFixed(1)} Hz (expected ~261.6 Hz)`);
+  // A genuinely high, cleanly periodic tone must not be second-guessed down
+  // an octave just because CMNDF also dips at its own doubled period.
+  for(const cleanF0 of [261.63,349.23,440,523.25,659.26]){
+    const cleanTrack=PE.yinPitchTrack(sine(cleanF0,.5),sr);
+    const cleanVoiced=[]; for(let i=0;i<cleanTrack.f0s.length;i++) if(cleanTrack.voiced[i]) cleanVoiced.push(cleanTrack.f0s[i]);
+    cleanVoiced.sort((a,b)=>a-b);
+    const cleanMedian=cleanVoiced[cleanVoiced.length>>1];
+    assert(Math.abs(1200*Math.log2(cleanMedian/cleanF0))<20,`clean tone ${cleanF0} Hz was second-guessed to ${cleanMedian?.toFixed(1)} Hz`);
+  }
   // iPhone long files analyse a 2x downsampled copy; analysis hop samples
   // must not be reused as output-rate samples when building the wet mask.
   const halfRate=Float32Array.from({length:phrase.length>>1},(_,i)=>(phrase[2*i]+phrase[2*i+1])/2);
