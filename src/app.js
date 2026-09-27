@@ -62,7 +62,7 @@
             const segments = PE.segmentNotes(pitchTrack);
             resolve({ type: 'analyzed', pitchTrack, segments });
           } else if (payload.type === 'resynth') {
-            const channels = PE.resynthesize(payload.channels, payload.sr, payload.pitchTrack, payload.segments);
+            const channels = PE.resynthesize(payload.channels, payload.sr, payload.pitchTrack, payload.segments, { guideChannel: payload.guideChannel });
             resolve({ type: 'resynthed', channels });
           } else if (payload.type === 'reference') {
             const refPitchTrack = PE.yinPitchTrack(payload.refSignal, payload.refSr, payload.opts || undefined);
@@ -812,6 +812,8 @@
         const channel = decoded.getChannelData(c);
         S.origChannels.push(IS_IOS ? channel : Float32Array.from(channel));
       }
+      // Pitch marks follow one channel for the whole song (see engine).
+      S.guideChannel = PE.guideChannelIndex(S.origChannels);
 
       const analyzeLabel = analysis.downsampled ? 'ピッチを省メモリ解析中(iPhone最適化)' : 'ピッチを解析中';
       loadingStatus.textContent = `${analyzeLabel}... 0%`;
@@ -2662,13 +2664,13 @@
       await new Promise(requestAnimationFrame);
       res = { channels: await PE.resynthesizeChunked(
         S.origChannels, S.sr, S.pitchTrack, segsPlain,
-        { blockFrames: 16384 }
+        { blockFrames: 16384, guideChannel: S.guideChannel }
       ) };
     } else {
       // Android/desktop retain Worker execution to keep the UI responsive.
       const channelsCopy = S.origChannels.map((c) => Float32Array.from(c));
       res = await workerCall(
-        { type: 'resynth', channels: channelsCopy, sr: S.sr, pitchTrack: S.pitchTrack, segments: segsPlain },
+        { type: 'resynth', channels: channelsCopy, sr: S.sr, pitchTrack: S.pitchTrack, segments: segsPlain, guideChannel: S.guideChannel },
         channelsCopy.map((c) => c.buffer)
       );
     }
@@ -2695,12 +2697,24 @@
     // entire neighboring note. A bounded pitch-aware margin provides several
     // periods for PSOLA + the existing feather transition.
     const centerHz = seg.medianMidi != null ? PE.midiToFreq(seg.medianMidi) : 120;
-    const pad = Math.max(0.055, Math.min(0.14, 6 / Math.max(70, centerHz) + 0.035));
+    // Pitch transitions reach up to PITCH_TRANSITION_SEC into a neighbour.
+    const pad = Math.max(0.055 + PE.PITCH_TRANSITION_SEC, Math.min(0.14, 6 / Math.max(70, centerHz) + 0.035));
     const duration = S.origChannels[0].length / S.sr;
     const prevBoundary = prev ? Math.max(prev.startTime, prev.endTime - pad) : seg.startTime - pad;
     const nextBoundary = next ? Math.min(next.endTime, next.startTime + pad) : seg.endTime + pad;
-    const regionStartSec = Math.max(0, Math.min(seg.startTime - pad, prevBoundary));
-    const regionEndSec = Math.min(duration, Math.max(seg.endTime + pad, nextBoundary));
+    let regionStartSec = Math.max(0, Math.min(seg.startTime - pad, prevBoundary));
+    let regionEndSec = Math.min(duration, Math.max(seg.endTime + pad, nextBoundary));
+    // Legato edits are rendered as one continuous span. Cover every span
+    // that overlaps this window, so the splice lands in dry audio instead of
+    // cutting a differently phased grain chain (bounded for long takes; the
+    // splice crossfade in doPartialResynth covers anything beyond).
+    const spanMargin = 0.04;
+    const maxLocalSec = 12;
+    for (const span of PE.resynthRegions(segs, S.pitchTrack)) {
+      if (span.endTime < regionStartSec || span.startTime > regionEndSec) continue;
+      regionStartSec = Math.max(0, Math.min(regionStartSec, span.startTime - spanMargin), seg.startTime - maxLocalSec / 2);
+      regionEndSec = Math.min(duration, Math.max(regionEndSec, span.endTime + spanMargin), seg.endTime + maxLocalSec / 2);
+    }
     if (regionEndSec <= regionStartSec) return null;
 
     const { times, f0s, voiced, clarity } = S.pitchTrack;
@@ -2748,12 +2762,22 @@
     const { regionStartSample, regionEndSample, localChannels, localPitchTrack, localSegments } = region;
     const localN = regionEndSample - regionStartSample;
     const res = await workerCall(
-      { type: 'resynth', preferMainThread: true, channels: localChannels, sr: S.sr, pitchTrack: localPitchTrack, segments: localSegments },
+      { type: 'resynth', preferMainThread: true, channels: localChannels, sr: S.sr, pitchTrack: localPitchTrack, segments: localSegments, guideChannel: S.guideChannel },
       localChannels.map((c) => c.buffer)
     );
     if (audioSessionId !== S.audioSessionId || !S.editedChannels) return;
+    // Short equal-gain crossfade at both splice edges. Normally both sides
+    // are identical dry audio there; when they are not (a very long legato
+    // span, or a span that an edit just split), it avoids a hard step.
+    const fade = Math.min(Math.round(S.sr * 0.012), localN >> 2);
     res.channels.forEach((ch, c) => {
-      if (S.editedChannels[c]) S.editedChannels[c].set(ch.subarray(0, localN), regionStartSample);
+      const dst = S.editedChannels[c];
+      if (!dst) return;
+      for (let i = 0; i < localN; i++) {
+        const w = i < fade ? i / fade : (i >= localN - fade ? (localN - 1 - i) / fade : 1);
+        const at = regionStartSample + i;
+        dst[at] = w >= 1 ? ch[i] : dst[at] * (1 - w) + ch[i] * w;
+      }
     });
     console.info(`[PitchEditor] local resynthesis ${(performance.now() - partialT0).toFixed(0)} ms, ${(localN / S.sr).toFixed(2)} s region`);
   }

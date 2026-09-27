@@ -12,7 +12,7 @@ self.onmessage = function (e) {
       const segments = PitchEngine.segmentNotes(pitchTrack);
       self.postMessage({ type: 'analyzed', id: msg.id, pitchTrack, segments });
     } else if (msg.type === 'resynth') {
-      const channels = PitchEngine.resynthesize(msg.channels, msg.sr, msg.pitchTrack, msg.segments);
+      const channels = PitchEngine.resynthesize(msg.channels, msg.sr, msg.pitchTrack, msg.segments, { guideChannel: msg.guideChannel });
       self.postMessage({ type: 'resynthed', id: msg.id, channels }, channels.map(c => c.buffer));
     } else if (msg.type === 'reference') {
       const refPitchTrack = PitchEngine.yinPitchTrack(msg.refSignal, msg.refSr, msg.opts || undefined);

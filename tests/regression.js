@@ -135,6 +135,51 @@ async function main(){
   }
   plainErr.sort((a,b)=>a-b);
   assert(plainErr.length>5&&plainErr[Math.floor(plainErr.length*.9)]<30,`plain app segment edit pitch p90 ${plainErr[Math.floor(plainErr.length*.9)]} cents`);
+  // Smooth note transitions. Moving one legato note used to switch its
+  // shift instantly at the boundary (a pitch step), and every note restarted
+  // its own grain chain, so even a uniform edit broke the waveform there.
+  const plainOf=(s,shift)=>({startFrame:s.startFrame,endFrame:s.endFrame,startTime:s.startTime,endTime:s.endTime,shiftSemitones:shift,fineCents:0,lineOffsets:null,autoCurve:false});
+  const fineOpts={frameSize:1024,hopSize:64,fmin:90};
+  const glideOut=PE.resynthesize([phrase],sr,phraseTrack,phraseSegs.map((s,k)=>plainOf(s,k===2?2:0)))[0];
+  const glideTrack=PE.yinPitchTrack(glideOut,sr,fineOpts),glideSource=PE.yinPitchTrack(phrase,sr,fineOpts);
+  let worstStep=0,lostVoicing=0;
+  for(const b of [phraseSegs[2].startTime,phraseSegs[3].startTime]){
+    let prev=null;
+    for(let i=0;i<glideTrack.times.length;i++){
+      const t=glideTrack.times[i];if(t<b-.06||t>b+.06)continue;
+      // An instant step reads as a burst of unvoiced frames, not a jump.
+      if(glideSource.voiced[i]&&!glideTrack.voiced[i])lostVoicing++;
+      if(!glideTrack.voiced[i]){prev=null;continue;}
+      const m=PE.freqToMidi(glideTrack.f0s[i]);
+      if(prev!=null){let d=m-prev;d-=12*Math.round(d/12);worstStep=Math.max(worstStep,Math.abs(d));}
+      prev=m;
+    }
+  }
+  assert(worstStep<0.6&&lostVoicing<=2,`edited note boundary is not continuous: ${(worstStep*100).toFixed(0)} cent step, ${lostVoicing} frames lost periodicity`);
+  // Equal shifts on neighbouring notes must render exactly like one note.
+  const merged=[Object.assign(plainOf(phraseSegs[0],3),{endFrame:phraseSegs[phraseSegs.length-1].endFrame,endTime:phraseSegs[phraseSegs.length-1].endTime})];
+  const uniformOut=PE.resynthesize([phrase],sr,phraseTrack,phraseSegs.map(s=>plainOf(s,3)))[0];
+  const mergedOut=PE.resynthesize([phrase],sr,phraseTrack,merged)[0];
+  assert(maxDiff(mergedOut,uniformOut)<1e-6,'uniform edit restarts the grain chain at note boundaries');
+  // A local render covering a whole resynthesis span, with the song's guide
+  // channel, must match the full render there (the app's per-note path).
+  const stereoPhrase=[phrase,Float32Array.from(phrase,(v,i)=>.8*v+.2*(phrase[i-331]||0))];
+  const localEdits=phraseSegs.map((s,k)=>plainOf(s,[1,-1,2,0,0][k]||0));
+  const fullStereo=PE.resynthesize(stereoPhrase,sr,phraseTrack,localEdits,{guideChannel:0});
+  const span=PE.resynthRegions(localEdits,phraseTrack)[0];
+  const w0=Math.max(0,span.startTime-.05),w1=span.endTime+.05,s0=Math.round(w0*sr),s1=Math.round(w1*sr);
+  const f0=phraseTrack.times.findIndex(t=>t>=w0);let f1=phraseTrack.times.findIndex(t=>t>w1);if(f1<0)f1=phraseTrack.times.length;
+  const localTrack={times:phraseTrack.times.slice(f0,f1).map(t=>t-s0/sr),f0s:phraseTrack.f0s.slice(f0,f1),voiced:phraseTrack.voiced.slice(f0,f1),clarity:phraseTrack.clarity.slice(f0,f1),hopSize:phraseTrack.hopSize};
+  const localSegs=localEdits.filter(s=>s.endTime>w0&&s.startTime<w1).map(s=>Object.assign({},s,{startFrame:Math.max(0,s.startFrame-f0),endFrame:Math.min(f1-f0,s.endFrame-f0),startTime:s.startTime-s0/sr,endTime:s.endTime-s0/sr}));
+  const localStereo=PE.resynthesize(stereoPhrase.map(c=>c.slice(s0,s1)),sr,localTrack,localSegs,{guideChannel:0});
+  let localErr=0,localPow=0;
+  for(let c=0;c<2;c++)for(let i=0;i<s1-s0;i++){const e=localStereo[c][i]-fullStereo[c][s0+i];localErr+=e*e;localPow+=fullStereo[c][s0+i]**2;}
+  assert(10*Math.log10(localErr/localPow)<-40,`local render differs from full render by ${(10*Math.log10(localErr/localPow)).toFixed(1)} dB`);
+  // Do not glide into a neighbour whose pitch jumps implausibly (usually an
+  // analysis octave error): resynthesising it with a wrong period is worse.
+  const octaveTrack2={...phraseTrack,f0s:Float64Array.from(phraseTrack.f0s,(f,i)=>i>=phraseSegs[3].startFrame&&i<phraseSegs[3].endFrame?f*2:f)};
+  const octaveSpans=PE.resynthRegions(phraseSegs.map((s,k)=>plainOf(s,k===2?2:0)),octaveTrack2);
+  assert(octaveSpans.length===1&&Math.abs(octaveSpans[0].endTime-phraseSegs[2].endTime)<1e-9,'transition extended into an octave-jump neighbour');
   // An octave-down edit must actually sound an octave lower. Normalising by a
   // near-zero overlap sum restored the original period between grains.
   const octaveSeg=phraseSegs[2];
