@@ -311,6 +311,30 @@ async function main(){
   assert(progress.length>=10&&progress.every(m=>m.type==='progress'&&m.id===13),'worker analysis progress missing');
   assert(progress.every((m,i)=>m.fraction>=0&&m.fraction<1&&(i===0||m.fraction>progress[i-1].fraction)),'analysis progress is not monotonic');
   assert.equal(messages[messages.length-1].type,'analyzed');assert.equal(messages[messages.length-1].id,13);
+  // Key/scale snapping and per-note mute.
+  assert.equal(PE.snapToScale(61.4,0,'chromatic'),61);
+  assert.equal(PE.snapToScale(61.4,0,'major'),62,'C# is not in C major: 61.4 goes to D');
+  assert.equal(PE.snapToScale(60.6,0,'major'),60,'60.6 is nearer C than D in C major');
+  assert.equal(PE.snapToScale(63.2,0,'major'),64,'Eb is out of C major; 63.2 goes to E');
+  assert.equal(PE.snapToScale(63.2,0,'minor'),63,'Eb is in C minor');
+  assert.equal(PE.snapToScale(70.4,9,'pentatonicMinor'),69,'A minor pentatonic has A but no Bb');
+  assert.equal(PE.snapToScale(59.6,0,'major'),60,'octave boundaries snap across octaves');
+  {
+    const tone=sine(261.63,1.0);
+    const track=PE.yinPitchTrack(tone,sr);
+    const segs=[{startFrame:0,endFrame:track.times.length,startTime:track.times[0],endTime:track.times[track.times.length-1],shiftSemitones:0,fineCents:0,lineOffsets:null,muted:true}];
+    const from=Math.round(.3*sr), to=Math.round(.7*sr);
+    segs[0].startTime=.3; segs[0].endTime=.7;
+    for(const fn of ['resynthesize','resynthesizeChunked']){
+      const out=await PE[fn]([tone],sr,track,segs,{});
+      let mid=0,outside=0;
+      for(let i=from+300;i<to-300;i++) mid=Math.max(mid,Math.abs(out[0][i]));
+      for(let i=0;i<from-10;i++) outside=Math.max(outside,Math.abs(out[0][i]-tone[i]));
+      for(let i=to+10;i<tone.length;i++) outside=Math.max(outside,Math.abs(out[0][i]-tone[i]));
+      assert.equal(mid,0,`${fn}: muted note is not silent`);
+      assert.equal(outside,0,`${fn}: mute changed audio outside the note`);
+    }
+  }
   console.log(`regression PASS: edit→F0 ${outputPitch.toFixed(2)} Hz; vibrato spread ${spreadIn.toFixed(3)}→${spreadOut.toFixed(3)} st; unvoiced max Δ ${noiseDelta}; boundary step ${sourceStep.toFixed(4)}→${outputStep.toFixed(4)}; stereo drift ${stereoError}; reference alignment; standard/chunked max Δ ${difference}; stereo WAV header; worker analyze`);
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

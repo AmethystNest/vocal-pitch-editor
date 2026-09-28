@@ -205,6 +205,8 @@
     audioSessionId: 0,
     undoStack: [],
     undoLimit: 10,
+    redoStack: [],
+    scaleRoot: 0, scaleType: 'chromatic',
 
     mode: 'note',       // 'note' (drag whole blob) | 'line' (free-hand paint the curve)
     splitArmed: false,  // next tap on a blob splits it there instead of selecting it
@@ -672,6 +674,7 @@
     S.pitchTrack = null;
     S.segments = null;
     S.undoStack = [];
+    S.redoStack = [];
     updateUndoBtn();
     updateAccessibleNoteNav();
     S.editedChannels = null;
@@ -892,7 +895,8 @@
     // Undo, mode changes and edit-only controls have no action until analysis
     // succeeds. Hide them from sequential assistive-technology navigation too.
     $('undoBtn').disabled = !enabled || S.undoStack.length === 0;
-    ['undoBtn', 'fullscreenBtn', 'modeNoteBtn', 'modeLineBtn', 'autoPreviewBtn', 'resetAllBtn', 'autoCorrectBtn', 'refBtn', 'refPlayBtn', 'splitBtn', 'applyAllBtn', 'zoomOutBtn', 'zoomInBtn', 'fitAllBtn', 'exportBtn', 'playBtn'].forEach((id) => {
+    $('redoBtn').disabled = !enabled || S.redoStack.length === 0;
+    ['undoBtn', 'redoBtn', 'fullscreenBtn', 'modeNoteBtn', 'modeLineBtn', 'autoPreviewBtn', 'resetAllBtn', 'autoCorrectBtn', 'refBtn', 'refPlayBtn', 'splitBtn', 'applyAllBtn', 'zoomOutBtn', 'zoomInBtn', 'fitAllBtn', 'exportBtn', 'playBtn'].forEach((id) => {
       const control = $(id);
       if (!control) return;
       if (!enabled) control.setAttribute('tabindex', '-1');
@@ -1375,7 +1379,9 @@
       if (bx1 - bx0 > 1) {
         roundRectPath(bx0, blockTop + 1, bx1 - bx0, S.rowHeight - 2, 5);
         ctx2d.fillStyle = isNoteDrag ? COLOR_BLOCK_SEL : (selected ? COLOR_BLOCK_HOT : COLOR_BLOCK);
+        if (seg.muted) ctx2d.globalAlpha = 0.3;
         ctx2d.fill();
+        ctx2d.globalAlpha = 1;
         ctx2d.lineWidth = selected ? 2.8 : 1.5;
         ctx2d.strokeStyle = selected ? '#ffffff' : (isNoteDrag ? COLOR_BLOCK_EDGE_HOT : COLOR_BLOCK_EDGE);
         if (selected) {
@@ -1386,6 +1392,18 @@
           ctx2d.restore();
         } else {
           ctx2d.stroke();
+        }
+
+        if (seg.muted) {
+          ctx2d.save();
+          roundRectPath(bx0, blockTop + 1, bx1 - bx0, S.rowHeight - 2, 5);
+          ctx2d.clip();
+          ctx2d.strokeStyle = 'rgba(255,255,255,.35)';
+          ctx2d.lineWidth = 1;
+          ctx2d.beginPath();
+          for (let hx = bx0 - S.rowHeight; hx < bx1; hx += 8) { ctx2d.moveTo(hx, blockTop + S.rowHeight); ctx2d.lineTo(hx + S.rowHeight, blockTop); }
+          ctx2d.stroke();
+          ctx2d.restore();
         }
 
         if (selected || isNoteDrag) {
@@ -1655,7 +1673,7 @@
   let pinchActive = false;
 
   function resetSegment(seg) {
-    seg.shiftSemitones = 0; seg.fineCents = 0; seg.lineOffsets = null; seg.autoCurve = false;
+    seg.shiftSemitones = 0; seg.fineCents = 0; seg.lineOffsets = null; seg.autoCurve = false; seg.muted = false;
   }
 
   // Paint free-hand pitch offsets (Line tool) into seg.lineOffsets for every
@@ -1992,6 +2010,7 @@
     const out = Object.assign({}, seg);
     out.lineOffsets = seg.lineOffsets ? Float64Array.from(seg.lineOffsets) : null;
     out.autoCurve = !!seg.autoCurve;
+    out.muted = !!seg.muted;
     return out;
   }
 
@@ -2008,12 +2027,18 @@
     btn.disabled = !S.segments || S.undoStack.length === 0;
     btn.title = `1つ前の編集に戻る（残り ${S.undoStack.length} / ${S.undoLimit}）`;
     btn.setAttribute('aria-label', btn.disabled ? '元に戻す。取り消せる編集はありません' : `元に戻す。取り消せる編集 ${S.undoStack.length} 件`);
+    const redo = $('redoBtn');
+    if (redo) {
+      redo.disabled = !S.segments || S.redoStack.length === 0;
+      redo.setAttribute('aria-label', redo.disabled ? 'やり直す。やり直せる編集はありません' : `やり直す。やり直せる編集 ${S.redoStack.length} 件`);
+    }
   }
 
   function pushUndoSnapshot(snapshot) {
     if (!snapshot || !snapshot.segments) return;
     S.undoStack.push(snapshot);
     if (S.undoStack.length > S.undoLimit) S.undoStack.shift();
+    S.redoStack.length = 0;
     updateUndoBtn();
   }
 
@@ -2023,16 +2048,18 @@
 
   function clearUndoHistory() {
     S.undoStack.length = 0;
+    S.redoStack.length = 0;
     updateUndoBtn();
   }
 
-  async function undoLastEdit() {
-    if (!S.undoStack.length) {
-      toastMsg('戻せる編集はありません');
+  async function stepHistory(from, to, emptyMsg, doneMsg) {
+    if (!from.length) {
+      toastMsg(emptyMsg);
       return;
     }
 
-    const snap = S.undoStack.pop();
+    const snap = from.pop();
+    to.push(makeEditSnapshot());
 
     // Stop stale preview/playback so restored state is what the user hears.
     if (S.soloSource) {
@@ -2057,10 +2084,19 @@
     // A split or bulk change may affect segment layout, so full resynthesis is safest.
     S.previewSegId = null;
     scheduleResynth();
-    toastMsg(`1つ前に戻しました（残り ${S.undoStack.length}）`);
+    toastMsg(doneMsg());
+  }
+
+  function undoLastEdit() {
+    return stepHistory(S.undoStack, S.redoStack, '戻せる編集はありません', () => `1つ前に戻しました（残り ${S.undoStack.length}）`);
+  }
+
+  function redoLastEdit() {
+    return stepHistory(S.redoStack, S.undoStack, 'やり直せる編集はありません', () => `やり直しました（残り ${S.redoStack.length}）`);
   }
 
   $('undoBtn').addEventListener('click', undoLastEdit);
+  $('redoBtn').addEventListener('click', redoLastEdit);
 
   function zoomAroundCenter(factor) {
     const w = Math.max(1, rollWrap.clientWidth);
@@ -2310,10 +2346,12 @@
     return changed;
   }
 
+  function snapTarget(midi) { return PE.snapToScale(midi, S.scaleRoot, S.scaleType); }
+
   function applyNearestCorrection(seg, strength = S.correctionStrength) {
     if (!seg || !Number.isFinite(seg.medianMidi)) return false;
     const currentCenter = seg.medianMidi + currentShift(seg) + medianLineOffset(seg);
-    const target = Math.round(currentCenter);
+    const target = snapTarget(currentCenter);
     return applyTargetWithStrength(seg, target, strength);
   }
 
@@ -2406,11 +2444,14 @@
     const seg = S.segments.find(s => s.id === S.selectedSegId);
     if (!seg) { inspector.style.display = 'none'; updateAccessibleNoteNav(); return; }
     inspector.style.display = 'block';
+    const muteBtn = $('inspMute');
+    muteBtn.setAttribute('aria-pressed', seg.muted ? 'true' : 'false');
+    muteBtn.textContent = seg.muted ? '🔈 ミュートを解除' : '🔇 このノートをミュート';
     const shift = currentShift(seg);
     const lineMedian = medianLineOffset(seg);
     const beforeMidi = seg.medianMidi;
     const afterMidi = seg.medianMidi + shift + lineMedian;
-    const targetMidi = Math.round(afterMidi);
+    const targetMidi = snapTarget(afterMidi);
     const orderedSegments = S.segments.slice().sort((a, b) => a.startTime - b.startTime);
     const selectedPosition = orderedSegments.findIndex(item => item.id === seg.id) + 1;
     inspNote.textContent = PE.midiToNoteName(targetMidi);
@@ -2468,7 +2509,7 @@
     const undoSnapshot = rememberBeforeEdit();
     const lineMedian = medianLineOffset(seg);
     const currentMidi = seg.medianMidi + currentShift(seg) + lineMedian;
-    const targetMidi = Math.round(currentMidi);
+    const targetMidi = snapTarget(currentMidi);
     if (!applyTargetWithStrength(seg, targetMidi)) {
       toastMsg('このノートはすでに目標付近です');
       return;
@@ -2533,10 +2574,48 @@
 
 
   document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const key = e.key.toLowerCase();
+    if (key === 'z' && !e.shiftKey) {
       e.preventDefault();
       undoLastEdit();
+    } else if ((key === 'z' && e.shiftKey) || key === 'y') {
+      e.preventDefault();
+      redoLastEdit();
     }
+  });
+
+  // Key/scale used for correction targets (persisted per browser).
+  const scaleRootSel = $('scaleRoot'), scaleTypeSel = $('scaleType');
+  try {
+    const saved = JSON.parse(localStorage.getItem('pitchEditorScale') || 'null');
+    if (saved && Number.isInteger(saved.root) && saved.root >= 0 && saved.root < 12 && PE.SCALES[saved.type]) {
+      S.scaleRoot = saved.root; S.scaleType = saved.type;
+    }
+  } catch (e) {}
+  scaleRootSel.value = String(S.scaleRoot);
+  scaleTypeSel.value = S.scaleType;
+  function onScaleChange() {
+    S.scaleRoot = parseInt(scaleRootSel.value, 10) || 0;
+    S.scaleType = PE.SCALES[scaleTypeSel.value] ? scaleTypeSel.value : 'chromatic';
+    try { localStorage.setItem('pitchEditorScale', JSON.stringify({ root: S.scaleRoot, type: S.scaleType })); } catch (e) {}
+    updateInspector();
+    toastMsg(`補正先: ${scaleRootSel.selectedOptions[0].textContent} ${scaleTypeSel.selectedOptions[0].textContent}`);
+  }
+  scaleRootSel.addEventListener('change', onScaleChange);
+  scaleTypeSel.addEventListener('change', onScaleChange);
+
+  $('inspMute').addEventListener('click', () => {
+    if (S.selectedSegId == null) return;
+    const seg = S.segments.find(s => s.id === S.selectedSegId);
+    if (!seg) return;
+    const undoSnapshot = rememberBeforeEdit();
+    seg.muted = !seg.muted;
+    pushUndoSnapshot(undoSnapshot);
+    updateInspector(); render();
+    S.previewSegId = null;
+    scheduleResynth(seg.id);
+    toastMsg(seg.muted ? 'ノートをミュートしました' : 'ミュートを解除しました');
   });
 
   // ============================================================
@@ -2648,7 +2727,7 @@
       startFrame: s.startFrame, endFrame: s.endFrame, startTime: s.startTime, endTime: s.endTime,
       shiftSemitones: s.shiftSemitones, fineCents: s.fineCents,
       lineOffsets: s.lineOffsets ? Float64Array.from(s.lineOffsets) : null,
-      autoCurve: !!s.autoCurve,
+      autoCurve: !!s.autoCurve, muted: !!s.muted,
     };
   }
 

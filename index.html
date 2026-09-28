@@ -163,6 +163,8 @@
   #inspector .noteName { font-size: 15px; font-weight: 700; color: var(--accent2); }
   #inspector .closeX { width: 26px; height: 26px; border-radius: 8px; background: var(--panel2); border: none; color: var(--sub); font-size: 13px; }
   #inspector .offsetLine { font-size: 12px; color: var(--sub); margin-bottom: 8px; }
+  #inspector .scaleRow { display:flex; gap:4px; align-items:center; margin:6px 0; font-size:12px; }
+  #inspector .scaleRow select { flex:1; min-width:0; min-height:32px; background:var(--key-black); color:inherit; border:1px solid rgba(255,255,255,.2); border-radius:6px; }
   #inspector .rowBtns { display: flex; gap: 4px; margin-bottom: 6px; }
   #inspector .rowBtns button {
     flex: 1; height: 30px; border-radius: 8px; border: none; background: var(--panel2);
@@ -360,6 +362,7 @@
       <button class="iconBtn" id="fullscreenBtn" title="Androidで全画面表示" hidden>⛶<span class="toolLabel">全画面</span></button>
       <button class="iconBtn accent" id="playBtn" title="再生/一時停止" disabled>▶<span class="toolLabel">再生</span></button>
       <button class="iconBtn" id="undoBtn" title="1つ前の編集に戻る（最大10回）" disabled>↶<span class="toolLabel">戻る</span></button>
+      <button class="iconBtn" id="redoBtn" title="取り消した編集をやり直す" aria-label="やり直す。やり直せる編集はありません" disabled>↷<span class="toolLabel">進む</span></button>
       <span id="fileNameLabel"></span>
       <button class="iconBtn wide accent" id="exportBtn" title="24-bit WAVで書き出し" disabled>⬇<span class="toolLabel">書き出し</span></button>
       <button class="iconBtn" id="zoomOutBtn" title="縮小" disabled>−<span class="toolLabel">縮小</span></button>
@@ -418,6 +421,15 @@
             <button class="strengthPreset" data-strength="100">完全 100</button>
           </div>
           <input class="strengthRange" id="strengthRange" type="range" min="0" max="100" step="1" value="60" aria-label="補正強度">
+          <div class="scaleRow">
+            <label for="scaleRoot">キー</label>
+            <select id="scaleRoot" aria-label="補正先のキー">
+              <option value="0">C</option><option value="1">C♯/D♭</option><option value="2">D</option><option value="3">E♭</option><option value="4">E</option><option value="5">F</option><option value="6">F♯/G♭</option><option value="7">G</option><option value="8">A♭</option><option value="9">A</option><option value="10">B♭</option><option value="11">B</option>
+            </select>
+            <select id="scaleType" aria-label="補正先のスケール">
+              <option value="chromatic">クロマチック</option><option value="major">メジャー</option><option value="minor">マイナー</option><option value="harmonicMinor">ハーモニックマイナー</option><option value="pentatonicMajor">ペンタ(長)</option><option value="pentatonicMinor">ペンタ(短)</option>
+            </select>
+          </div>
           <div class="strengthHint">ビブラートや細かな揺れは残したまま、ノート中心だけを目標へ寄せます。</div>
         </div>
         <button class="playSegBtn" id="inspPlay">▶ この音を再生</button>
@@ -429,6 +441,7 @@
           <button data-d="-50">-50¢</button><button data-d="-10">-10¢</button><button data-d="-1">-1¢</button>
           <button data-d="1">+1¢</button><button data-d="10">+10¢</button><button data-d="50">+50¢</button>
         </div>
+        <button class="playSegBtn" id="inspMute" type="button" aria-pressed="false">🔇 このノートをミュート</button>
         <button class="resetBtn" id="inspReset">このノートをリセット</button>
       </div>
       <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>

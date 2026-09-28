@@ -2,6 +2,14 @@
 
 ## CURRENT STATE — 2026-09-25 (current local measurements)
 
+### Current development cycle — scale snap, Redo, per-note mute (2026-09-28, cloud session)
+- Trigger: user supplied a reference app (VoxTune APK); only feature ideas were taken (no code, no SPICE/neural model — explicitly declined by the user). Approved order: 1) key/scale snap, 2) Redo, 3) note mute.
+- `PE.snapToScale(midi, root, scale)` + `PE.SCALES` (chromatic/major/minor/harmonic minor/pentatonic major & minor). Used by auto-correct, "中心へ補正" and the inspector target label. Key/scale selects live in the inspector strength panel and persist in localStorage (`pitchEditorScale`).
+- Redo: `S.redoStack`, `↷ 進む` button, Ctrl/Cmd+Shift+Z and Ctrl/Cmd+Y. A new edit clears the redo stack; loading a file clears it.
+- Mute: `seg.muted` is sent to the engine (`segmentToPlain`); `applyMutes` runs after both `resynthesize` and `resynthesizeChunked` (5 ms ramps inside the note, nothing outside changes). Works without any pitch edit. Reset (note/all) unmutes. Drawn as a translucent hatched block.
+- Verified: `npm run qa` PASS incl. new regression cases (scale snapping, mute silence + no change outside for both render paths); real Chromium (HTTP) run confirmed mute/undo/redo state, Ctrl+Z / Ctrl+Shift+Z, scale persistence, no page errors. Not verified: audible check of mute edges on real vocals, iPhone Safari, `tests/browser_e2e.py` modes, mobile layout of the new inspector row.
+- Not done from the shortlist: formant shift (needs feasibility check with TD-PSOLA), long-press loop audition (solo audition already exists).
+
 ### Current development cycle — YIN octave misdetection on "e"/"o"-like vowels (2026-09-27, cloud session)
 
 - **User-reported bug:** pitch analysis reports an octave too high on "え"/"お"-like vowels. Reproduced with a synthetic glottal-pulse vowel whose only strong formant sits at ~2x f0 (F1 ≈ 523 Hz for a target of C4/261.63 Hz): 100% of frames detected exactly one octave high. Root cause in `yinPitchTrack` (`src/engine.js`): YIN's absolute-threshold rule stops at the FIRST cmndf dip below threshold scanning from short to long lag; when a strong 2nd-harmonic/formant makes the half-period dip cross threshold on its own, it is picked before the true (longer, lower) period is ever reached. `stabilizeOctaveErrors` (a separate later pass) only repairs short isolated bursts by design and does not touch a sustained, frame-consistent error like this one.

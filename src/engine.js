@@ -1433,7 +1433,7 @@
   // High-level: resynthesize one or more channels given the current
   // segment edits. The PSOLA render is blended only into edited voiced areas;
   // everywhere else remains sample-for-sample original.
-  function resynthesize(channels, sr, pitchTrack, segments, opts) {
+  function resynthesizeCore(channels, sr, pitchTrack, segments, opts) {
     const n = channels[0].length;
     // Fast path: a file can contain many detected notes while none are edited.
     // Avoid even building the mono guide in that case.
@@ -1465,10 +1465,65 @@
   }
 
 
+  // Key/scale snapping for the correction target. `scale` is a name from
+  // SCALES; `root` is a pitch class 0-11 (C=0). Chromatic behaves like a plain
+  // round(). Ties between two equally distant scale notes resolve upward.
+  const SCALES = {
+    chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    major: [0, 2, 4, 5, 7, 9, 11],
+    minor: [0, 2, 3, 5, 7, 8, 10],
+    harmonicMinor: [0, 2, 3, 5, 7, 8, 11],
+    pentatonicMajor: [0, 2, 4, 7, 9],
+    pentatonicMinor: [0, 3, 5, 7, 10],
+  };
+
+  function snapToScale(midi, root, scale) {
+    const degrees = SCALES[scale] || SCALES.chromatic;
+    if (!Number.isFinite(midi)) return midi;
+    const base = Math.floor(midi);
+    let best = Math.round(midi), bestDist = Infinity;
+    for (let m = base - 12; m <= base + 13; m++) {
+      const pc = ((m - root) % 12 + 12) % 12;
+      if (!degrees.includes(pc)) continue;
+      const d = Math.abs(m - midi);
+      if (d < bestDist - 1e-9 || (Math.abs(d - bestDist) <= 1e-9 && m > best)) { best = m; bestDist = d; }
+    }
+    return best;
+  }
+
+  // Muted notes are silenced after rendering so they work with or without any
+  // pitch edit. The 5 ms ramps stay inside the note: nothing outside it changes.
+  function applyMutes(outputs, sr, segments) {
+    const n = outputs[0].length;
+    const fade = Math.max(1, Math.round(sr * 0.005));
+    for (const seg of segments) {
+      if (!seg.muted) continue;
+      const a = Math.max(0, Math.round(seg.startTime * sr));
+      const b = Math.min(n, Math.round(seg.endTime * sr));
+      if (b <= a) continue;
+      const f = Math.min(fade, (b - a) >> 1);
+      for (const out of outputs) {
+        for (let i = a; i < b; i++) {
+          const d = Math.min(i - a, b - 1 - i);
+          out[i] *= d >= f ? 0 : 1 - (d + 1) / (f + 1);
+        }
+      }
+    }
+    return outputs;
+  }
+
+  function resynthesize(channels, sr, pitchTrack, segments, opts) {
+    return applyMutes(resynthesizeCore(channels, sr, pitchTrack, segments, opts), sr, segments);
+  }
+
+  async function resynthesizeChunked(channels, sr, pitchTrack, segments, opts) {
+    return applyMutes(await resynthesizeChunkedCore(channels, sr, pitchTrack, segments, opts), sr, segments);
+  }
+
   // iOS full-render path: same PSOLA schedule/blend math as resynthesize(),
   // but overlap-add is accumulated in bounded blocks. This removes the two
   // full-length Float64 work arrays per channel and yields between blocks.
-  async function resynthesizeChunked(channels, sr, pitchTrack, segments, opts) {
+  async function resynthesizeChunkedCore(channels, sr, pitchTrack, segments, opts) {
     opts = opts || {};
     const n = channels[0].length;
     let hasAnyEdit = false;
@@ -1640,7 +1695,7 @@
     yinPitchTrack,
     freqToMidi, midiToFreq, midiToNoteName, NOTE_NAMES,
     segmentNotes, splitSegment, suggestFromReference,
-    buildGrainSchedule, applyGrainSchedule, resynthesize, resynthesizeChunked, makeWinCache,
+    buildGrainSchedule, applyGrainSchedule, resynthesize, resynthesizeChunked, snapToScale, SCALES, makeWinCache,
     resynthRegions, guideChannelIndex, PITCH_TRANSITION_SEC,
     encodeWav, encodeWavChunked,
   };
