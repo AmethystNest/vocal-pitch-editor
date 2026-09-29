@@ -311,6 +311,19 @@ async function main(){
   assert(progress.length>=10&&progress.every(m=>m.type==='progress'&&m.id===13),'worker analysis progress missing');
   assert(progress.every((m,i)=>m.fraction>=0&&m.fraction<1&&(i===0||m.fraction>progress[i-1].fraction)),'analysis progress is not monotonic');
   assert.equal(messages[messages.length-1].type,'analyzed');assert.equal(messages[messages.length-1].id,13);
+  // featherMask must equal the plain sliding box filter it replaced, sample for sample.
+  {
+    const ref=(mask,fade)=>{const n=mask.length,sm=new Float32Array(n),win=fade*2+1;let acc=0;
+      for(let i=0;i<n+fade;i++){acc+=(i<n?mask[i]:0)-(i-win>=0?mask[i-win]:0);const o=i-fade;if(o>=0&&o<n)sm[o]=Math.min(1,acc/Math.max(1,fade));}return sm;};
+    let seedState=9;const rnd=()=>{seedState=(1664525*seedState+1013904223)>>>0;return seedState/4294967296;};
+    for(let k=0;k<400;k++){
+      const n=Math.floor(rnd()*3000),fade=[8,10,384,3][k%4],flip=[0.5,0.001,0.01,0.05,0.2][k%5];
+      const m=new Float32Array(n);let v=rnd()<.5?1:0;
+      for(let i=0;i<n;i++){if(rnd()<flip)v=1-v;m[i]=v;}
+      const a=ref(m,fade),b=PE.featherMask(m,fade);
+      for(let i=0;i<n;i++) assert.equal(b[i],a[i],`featherMask differs at ${i} (n=${n}, fade=${fade})`);
+    }
+  }
   // Key/scale snapping and per-note mute.
   assert.equal(PE.snapToScale(61.4,0,'chromatic'),61);
   assert.equal(PE.snapToScale(61.4,0,'major'),62,'C# is not in C major: 61.4 goes to D');

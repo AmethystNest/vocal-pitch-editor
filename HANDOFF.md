@@ -2,6 +2,12 @@
 
 ## CURRENT STATE — 2026-09-25 (current local measurements)
 
+### Current development cycle — iPhone full-render main-thread stalls (2026-09-29, cloud session)
+- Finding: on the iPhone path the whole-song render (`resynthesizeChunked`) runs on the main thread. Its per-block loop yields fine (median 1 ms) but the setup before it was one long synchronous stretch: on a 180 s stereo track (PC Node) blend-mask 640 ms of ~900 ms. Also measured: the iPhone analysis downsample (2x, box average, 1024/256 YIN) loses no accuracy vs full-rate on a synthetic singer (median error 0.3 vs 0.2 cent, same MAD 3.7 c, no gross errors) and is ~4x faster — left unchanged.
+- Fix (no DSP change): `featherMask` sums only around 0↔1 changes (was every sample; identical output, regression-tested against the old sliding sum on 400 random masks); `localPeriodicity` shares energy terms across lags (identical to ~1e-15); the chunked render now hands the UI thread a turn between setup stages (guide+plan / grain schedule / raw mask / feather+coverage).
+- Measured (PC Node, 180 s stereo, 3 runs each, before → after): longest uninterrupted main-thread stretch ≈ 500 ms → ≈ 230 ms; total render time unchanged within noise (1454–1570 ms → 1347–1948 ms). Real iPhone stalls will differ (CPU several times slower); the ratio, not the absolute value, is what this indicates. Chromium with an iPhone UA ran the chunked full render with an edit end-to-end (201 ms, no page errors) — emulation, not Safari.
+- Not verified: physical iPhone timing/jank, Safari. Remaining stall sources: the blend-mask frame loop (~220 ms Node) and grain schedule (~100 ms) are still single passes; splitting them further is possible.
+
 ### Current development cycle — scale snap, Redo, per-note mute (2026-09-28, cloud session)
 - Trigger: user supplied a reference app (VoxTune APK); only feature ideas were taken (no code, no SPICE/neural model — explicitly declined by the user). Approved order: 1) key/scale snap, 2) Redo, 3) note mute.
 - `PE.snapToScale(midi, root, scale)` + `PE.SCALES` (chromatic/major/minor/harmonic minor/pentatonic major & minor). Used by auto-correct, "中心へ補正" and the inspector target label. Key/scale selects live in the inspector strength panel and persist in localStorage (`pitchEditorScale`).
