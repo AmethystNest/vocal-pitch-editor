@@ -1189,6 +1189,29 @@
     return buildShiftPlan(segments, pitchTrack, opts).regions.map(r => ({ startTime: r.startTime, endTime: r.endTime }));
   }
 
+  // Long setup passes are written as generators that `yield` every few
+  // hundred iterations. Synchronous callers drain them at once (same result as
+  // a plain function); the iPhone chunked render drives them with a time
+  // budget so the UI thread gets a turn between slices.
+  function drain(it) {
+    let r = it.next();
+    while (!r.done) r = it.next();
+    return r.value;
+  }
+  const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  async function drive(it, budgetMs) {
+    let last = nowMs();
+    let r = it.next();
+    while (!r.done) {
+      if (nowMs() - last >= budgetMs) {
+        await new Promise(requestAnimationFrame);
+        last = nowMs();
+      }
+      r = it.next();
+    }
+    return r.value;
+  }
+
   // Duration-preserving TD-PSOLA schedule, v4.
   //
   // Source marks follow the ORIGINAL f0 period. Synthesis marks follow the
@@ -1198,7 +1221,12 @@
   // the classic PSOLA operation -- without running a source clock to the end of
   // a note and wrapping it, and without cutting arbitrary phases of a cycle.
   function buildGrainSchedule(sr, n, pitchTrack, segments, opts) {
+    return drain(buildGrainScheduleGen(sr, n, pitchTrack, segments, opts));
+  }
+
+  function* buildGrainScheduleGen(sr, n, pitchTrack, segments, opts) {
     opts = opts || {};
+    let tick = 0;
     const defaultF0 = opts.defaultF0 || 150.0;
     const guideSignal = opts.guideSignal || null;
     const { times, f0s, voiced } = pitchTrack;
@@ -1214,6 +1242,7 @@
     const voicedB = bridgeVoicing(voiced, 2);
 
     for (const seg of plan.regions) {
+      yield;
       const marks = buildSourceMarksForSegment(sr, n, times, filledF0, guideSignal, seg, defaultF0);
       if (!marks.length) continue;
 
@@ -1228,6 +1257,7 @@
       // region's own time range (a NaN bound once silenced edited notes).
       const segDuration = Math.max(0, seg.endTime - seg.startTime);
       while (outTime < seg.endTime && safety++ < Math.ceil(segDuration * 1700) + 32) {
+        if ((++tick & 127) === 0) yield;
         const vHere = nearestFlag(outTime, times, voicedB);
         const pIn = inputPeriodAt(outTime, times, filledF0, defaultF0);
         let shiftSemi = plan.shiftAt(outTime);
@@ -1371,10 +1401,17 @@
   function featherBlendMask(mask, sr) {
     return featherMask(mask, Math.max(8, Math.round(sr * 0.008)));
   }
+  function* featherBlendMaskGen(mask, sr) {
+    return yield* featherMaskGen(mask, Math.max(8, Math.round(sr * 0.008)));
+  }
 
   // The hard 0/1 mask, before feathering (split out so the iPhone chunked
   // render can give the UI thread a turn between the two steps).
   function buildResynthBlendMaskRaw(sr, n, pitchTrack, segments, opts) {
+    return drain(buildResynthBlendMaskRawGen(sr, n, pitchTrack, segments, opts));
+  }
+
+  function* buildResynthBlendMaskRawGen(sr, n, pitchTrack, segments, opts) {
     opts = opts || {};
     const mask = new Float32Array(n);
     const { times, voiced, clarity, f0s } = pitchTrack;
@@ -1395,6 +1432,7 @@
     const plan = opts.shiftPlan || buildShiftPlan(segments, pitchTrack, opts);
     const voicedB = bridgeVoicing(voiced, 2);
     for (let fi = 0; fi < times.length; fi++) {
+      if ((fi & 127) === 127) yield;
       if (!voicedB[fi]) continue;
       const prevVoiced = fi > 0 ? !!voicedB[fi - 1] : false;
       const nextVoiced = fi + 1 < voicedB.length ? !!voicedB[fi + 1] : false;
@@ -1431,6 +1469,10 @@
   // samples around each change are summed. Identical output to the plain
   // sliding sum, without touching every sample of a long song.
   function featherMask(mask, fade) {
+    return drain(featherMaskGen(mask, fade));
+  }
+
+  function* featherMaskGen(mask, fade) {
     const n = mask.length;
     const out = new Float32Array(n);
     out.set(mask);
@@ -1451,6 +1493,7 @@
     if (mask[0] !== 0) dirty(0);
     for (let i = 1; i < n; i++) {
       if (mask[i] !== mask[i - 1]) dirty(i);
+      if ((i & 0x3ffff) === 0) yield;
     }
     if (mask[n - 1] !== 0) dirty(n);
     return out;
@@ -1617,16 +1660,18 @@
     // phone they add up to a visible freeze, so hand the UI thread a turn
     // between stages (the block loop below already does the same).
     const turn = () => new Promise(requestAnimationFrame);
+    const SLICE_MS = 10;
     const guide = guideChannelIndex(channels, opts);
     const guideSignal = makePsolaGuide(channels, guide);
     const sharedOpts = Object.assign({}, opts, { guideSignal });
     sharedOpts.shiftPlan = buildShiftPlan(segments, pitchTrack, sharedOpts);
     await turn();
-    const schedule = buildGrainSchedule(sr, n, pitchTrack, segments, sharedOpts);
+    const schedule = await drive(buildGrainScheduleGen(sr, n, pitchTrack, segments, sharedOpts), SLICE_MS);
     await turn();
-    const rawMask = buildResynthBlendMaskRaw(sr, n, pitchTrack, segments, sharedOpts);
+    const rawMask = await drive(buildResynthBlendMaskRawGen(sr, n, pitchTrack, segments, sharedOpts), SLICE_MS);
     await turn();
-    const blend = limitBlendToCoverage(featherBlendMask(rawMask, sr), schedule.cells, sr);
+    const feathered = await drive(featherBlendMaskGen(rawMask, sr), SLICE_MS);
+    const blend = limitBlendToCoverage(feathered, schedule.cells, sr);
     let anyWet = false;
     for (let i = 0; i < blend.length; i++) { if (blend[i] > 1e-5) { anyWet = true; break; } }
     if (!anyWet) return channels.map((ch) => Float32Array.from(ch));

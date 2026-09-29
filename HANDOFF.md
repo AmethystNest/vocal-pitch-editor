@@ -2,6 +2,11 @@
 
 ## CURRENT STATE — 2026-09-25 (current local measurements)
 
+### Current development cycle — sliced render setup for iPhone (2026-09-29, cloud session)
+- The remaining single-pass stalls of the chunked (iPhone) full render — grain schedule, blend-mask frame loop, feathering — are now generators (`buildGrainScheduleGen`, `buildResynthBlendMaskRawGen`, `featherMaskGen`) that yield every ~128 iterations. Synchronous callers still use the same names (`drain`, identical results); `resynthesizeChunked` drives them with `drive(it, 10 ms)`, awaiting `requestAnimationFrame` only when a 10 ms slice is used up.
+- Measured (PC Node, 180 s stereo, 3 runs, longest uninterrupted stretch): ≈ 230 ms → ≈ 36–44 ms; total render time unchanged within noise (1252–1711 ms). Expect a longer wall-clock on a real device (each slice boundary can wait up to one frame; roughly 50 boundaries on this track ≈ +0.8 s) in exchange for a responsive UI — not measured on hardware. Standard vs chunked outputs still equal (<1e-4); iPhone-UA Chromium ran the chunked full render with an edit (no page errors).
+- Not verified: physical iPhone jank/timing (Safari), background-tab behaviour (rAF pauses when hidden, as for the existing block loop).
+
 ### Current development cycle — per-note formant shift (2026-09-29, cloud session)
 - Idea from the reference-app survey (no code taken). TD-PSOLA fixes pitch by grain spacing, so the spectral envelope can be moved independently by reading each grain with its time axis scaled around the grain centre (`readGrainSample`, linear interpolation; ratio 2^(st/12); range ±5 st, `MAX_FORMANT_ST`). `formantSemitones` per note; `segmentHasPitchEdit` counts it; `buildShiftPlan.formantAt` follows the same legato transitions as pitch; grains at 0 st carry no `fmt` so the existing path is bit-identical (all prior regression cases unchanged).
 - UI: inspector slider `声色（フォルマント）` −5…+5 st (0.5 step), live re-render through the existing debounce, one undo entry per drag/keyboard burst (<1 s, nothing pushed in between), included in history clone/reset/`segmentToPlain`.
