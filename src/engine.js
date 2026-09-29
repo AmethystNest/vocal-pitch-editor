@@ -180,6 +180,31 @@
       }
       if (tau === -1) continue;
 
+      // A vowel whose formant sits near 2x f0 (a strong second harmonic --
+      // observed on some "e"/"o" shapes) can make YIN's first below-threshold
+      // dip land at half the true period, reporting exactly an octave too
+      // high. A genuine period also repeats at its own integer multiples, so
+      // this checks for a deeper cmndf minimum near double the candidate.
+      // CMNDF's cumulative normalisation also makes it naturally drift lower
+      // at larger lags on ANY clean, confidently periodic tone, so a deeper
+      // multiple alone is not enough evidence -- that happens even at the
+      // correct pitch. Only override a MARGINAL first pick (its own cmndf
+      // barely below the detection threshold) when the doubled candidate is
+      // decisively strong in both absolute and relative terms; a first pick
+      // that is already a clean, confident match is left alone. Checked
+      // twice to also catch a rarer two-octave error.
+      for (let pass = 0; pass < 2; pass++) {
+        if (cmndf[tau] < threshold * 0.5) break;
+        const target = tau * 2;
+        if (target >= maxLag - 1) break;
+        const lo = Math.max(minLag, Math.round(target * 0.94));
+        const hi = Math.min(maxLag - 2, Math.round(target * 1.06));
+        let bestJ = -1, bestVal = Infinity;
+        for (let j = lo; j <= hi; j++) if (cmndf[j] < bestVal) { bestVal = cmndf[j]; bestJ = j; }
+        if (bestJ < 0 || bestVal > 0.05 || bestVal > cmndf[tau] * 0.3) break;
+        tau = bestJ;
+      }
+
       clarity[i] = 1 - cmndf[tau];
       let tauRefined = tau;
       if (tau > 0 && tau < maxLag - 1) {
@@ -860,19 +885,27 @@
 
   // Build one mono guide waveform used only to place PSOLA grain centres.
   // All output channels reuse the same marks, so stereo phase/position remains locked.
-  function makePsolaGuide(channels) {
+  // A mono average can cancel almost completely for phase-inverted stereo.
+  // Use the most energetic channel to locate shared pitch marks instead; the
+  // resulting schedule is still applied identically to every channel. The
+  // app computes this once for the whole song (opts.guideChannel) so a local
+  // single-note render follows exactly the same channel as a full render.
+  function guideChannelIndex(channels, opts) {
+    const fixed = opts && opts.guideChannel;
+    if (Number.isInteger(fixed) && fixed >= 0 && fixed < channels.length) return fixed;
     const n = channels[0].length;
-    const g = new Float32Array(n);
-    // A mono average can cancel almost completely for phase-inverted stereo.
-    // Use the most energetic channel to locate shared pitch marks instead;
-    // the resulting schedule is still applied identically to every channel.
-    let best = channels[0], bestEnergy = -1;
-    for (const ch of channels) {
+    let best = 0, bestEnergy = -1;
+    for (let c = 0; c < channels.length; c++) {
       let energy = 0;
-      for (let i = 0; i < n; i += 16) energy += ch[i] * ch[i];
-      if (energy > bestEnergy) { bestEnergy = energy; best = ch; }
+      for (let i = 0; i < n; i += 16) energy += channels[c][i] * channels[c][i];
+      if (energy > bestEnergy) { bestEnergy = energy; best = c; }
     }
-    g.set(best);
+    return best;
+  }
+
+  function makePsolaGuide(channels, guide) {
+    const g = new Float32Array(channels[0].length);
+    g.set(channels[guide]);
     return g;
   }
 
@@ -926,6 +959,7 @@
   // the previous real mark and snapped only within a small fraction of a period,
   // which strongly reduces half-cycle/phase jumps on sustained vowels.
   function buildSourceMarksForSegment(sr, n, times, filledF0, guideSignal, seg, defaultF0) {
+    // seg only needs {startTime, endTime}; callers pass a whole edited region.
     const marks = [];
     const marginSec = 0.025;
     let seedTime = Math.max(0, seg.startTime - marginSec);
@@ -1010,6 +1044,120 @@
     return Math.max(0, Math.min(1, best));
   }
 
+  // Voicing with 1-2 frame YIN dropouts bridged. A single missed frame inside
+  // a sung vowel otherwise stops the grains and drops the wet mask for ~35 ms,
+  // so the note briefly snaps back to its original pitch.
+  function bridgeVoicing(voiced, maxGap) {
+    const out = Uint8Array.from(voiced);
+    let last = -1;
+    for (let i = 0; i < voiced.length; i++) {
+      if (!voiced[i]) continue;
+      if (last >= 0 && i - last - 1 > 0 && i - last - 1 <= maxGap) {
+        for (let k = last + 1; k < i; k++) out[k] = 1;
+      }
+      last = i;
+    }
+    return out;
+  }
+
+  // Continuous pitch-shift curve over time. Inside a note it is the note's
+  // shift (+ Line-tool offsets). Where two notes touch (legato) and at least
+  // one is edited, the shift crossfades with a raised cosine instead of
+  // stepping, so the corrected melody glides between notes like a singer
+  // would. Regions are the contiguous time spans that need resynthesis;
+  // each is rendered with ONE continuous grain schedule, so waveform phase
+  // never restarts at a note boundary inside it.
+  const PITCH_TRANSITION_SEC = 0.06;
+  const MAX_TRANSITION_JUMP_ST = 7;
+  const LEGATO_GAP_SEC = 0.03;
+  function buildShiftPlan(segments, pitchTrack, opts) {
+    opts = opts || {};
+    const { times, f0s, voiced } = pitchTrack;
+    const tw = opts.transitionSec != null ? opts.transitionSec : PITCH_TRANSITION_SEC;
+    // Median pitch of the few voiced frames nearest a note edge.
+    function edgeMidi(seg, fromEnd) {
+      const vals = [];
+      const lo = Math.max(0, seg.startFrame | 0), hi = Math.min(times.length, seg.endFrame | 0);
+      for (let k = 0; k < hi - lo && vals.length < 3; k++) {
+        const i = fromEnd ? hi - 1 - k : lo + k;
+        if (voiced[i] && f0s[i] > 0) vals.push(freqToMidi(f0s[i]));
+      }
+      if (!vals.length) return NaN;
+      vals.sort((a, b) => a - b);
+      return vals[vals.length >> 1];
+    }
+    const ordered = segments.slice().sort((a, b) => a.startTime - b.startTime);
+    const edited = ordered.map(segmentHasPitchEdit);
+    const base = (seg, t) => (seg.shiftSemitones || 0) + (seg.fineCents || 0) / 100 + lineOffsetAt(seg, times, t);
+    // trans[i] joins ordered[i] and ordered[i + 1].
+    const trans = new Array(ordered.length).fill(null);
+    for (let i = 0; i + 1 < ordered.length; i++) {
+      const a = ordered[i], b = ordered[i + 1];
+      if (!(edited[i] || edited[i + 1]) || tw <= 0) continue;
+      if (b.startTime - a.endTime > LEGATO_GAP_SEC) continue;
+      // Only glide across a plausible sung connection. A larger jump is a
+      // leap or, more often, an octave error in the analysis; resynthesising
+      // the neighbour with a wrong period there sounds worse than a step.
+      const jump = Math.abs(edgeMidi(b, false) - edgeMidi(a, true));
+      if (!(jump <= MAX_TRANSITION_JUMP_ST)) continue;
+      const mid = 0.5 * (a.endTime + b.startTime);
+      const lo = mid - Math.min(tw, 0.3 * Math.max(0, a.endTime - a.startTime));
+      const hi = mid + Math.min(tw, 0.3 * Math.max(0, b.endTime - b.startTime));
+      if (hi - lo > 1e-4) trans[i] = { lo, hi, a, b };
+    }
+    const starts = ordered.map(sg => sg.startTime);
+    function indexAt(t) {
+      let lo = 0, hi = starts.length - 1, idx = -1;
+      while (lo <= hi) { const m = (lo + hi) >> 1; if (starts[m] <= t) { idx = m; lo = m + 1; } else hi = m - 1; }
+      return idx;
+    }
+    function inTrans(tr, t) {
+      if (!tr || t < tr.lo || t > tr.hi) return null;
+      const w = 0.5 - 0.5 * Math.cos(Math.PI * (t - tr.lo) / (tr.hi - tr.lo));
+      return (1 - w) * base(tr.a, t) + w * base(tr.b, t);
+    }
+    function shiftAt(t) {
+      const j = indexAt(t);
+      let v = j >= 1 ? inTrans(trans[j - 1], t) : null;
+      if (v == null && j >= 0) v = inTrans(trans[j], t);
+      if (v != null) return v;
+      if (j >= 0 && t < ordered[j].endTime && edited[j]) return base(ordered[j], t);
+      return 0;
+    }
+    const regions = [];
+    for (let i = 0; i < ordered.length; i++) {
+      if (!edited[i]) continue;
+      const lo = i > 0 && trans[i - 1] ? trans[i - 1].lo : ordered[i].startTime;
+      const hi = trans[i] ? trans[i].hi : ordered[i].endTime;
+      const last = regions[regions.length - 1];
+      if (last && lo <= last.endTime + 0.002) last.endTime = Math.max(last.endTime, hi);
+      else regions.push({ startTime: lo, endTime: hi });
+    }
+    // A neighbour that is itself unedited still receives the transition tail.
+    for (let i = 0; i < trans.length; i++) {
+      const tr = trans[i];
+      if (!tr) continue;
+      for (const r of regions) {
+        if (tr.hi >= r.startTime - 0.002 && tr.lo <= r.endTime + 0.002) {
+          r.startTime = Math.min(r.startTime, tr.lo);
+          r.endTime = Math.max(r.endTime, tr.hi);
+        }
+      }
+    }
+    function regionAt(t) {
+      for (const r of regions) if (t >= r.startTime && t < r.endTime) return r;
+      return null;
+    }
+    return { shiftAt, regions, regionAt };
+  }
+
+  // Time spans that resynthesis renders as one continuous grain schedule.
+  // Local (single-note) renders must cover a whole span so their splice
+  // points fall where the output is still the dry original.
+  function resynthRegions(segments, pitchTrack, opts) {
+    return buildShiftPlan(segments, pitchTrack, opts).regions.map(r => ({ startTime: r.startTime, endTime: r.endTime }));
+  }
+
   // Duration-preserving TD-PSOLA schedule, v4.
   //
   // Source marks follow the ORIGINAL f0 period. Synthesis marks follow the
@@ -1031,42 +1179,47 @@
     // blend must stay inside these ranges; elsewhere the wet signal is silent.
     const cells = [];
 
-    for (const seg of segments) {
-      if (!segmentHasPitchEdit(seg)) continue;
+    const plan = opts.shiftPlan || buildShiftPlan(segments, pitchTrack, opts);
+    const voicedB = bridgeVoicing(voiced, 2);
+
+    for (const seg of plan.regions) {
       const marks = buildSourceMarksForSegment(sr, n, times, filledF0, guideSignal, seg, defaultF0);
       if (!marks.length) continue;
 
-      // Start synthesis on the first real source mark that falls in the note.
+      // Start synthesis on the first real source mark that falls in the region.
       let first = 0;
       while (first + 1 < marks.length && marks[first].time < seg.startTime) first++;
       let outTime = Math.max(seg.startTime, marks[first].time);
       let sourceHint = first;
       let safety = 0;
 
-      // The app sends plain segments without durationSec; relying on it made
-      // this bound NaN, so no grains were scheduled and the edited note went
-      // silent. Derive the duration from the segment's own time range.
+      // Plain app segments carry no durationSec, so bound the loop by the
+      // region's own time range (a NaN bound once silenced edited notes).
       const segDuration = Math.max(0, seg.endTime - seg.startTime);
       while (outTime < seg.endTime && safety++ < Math.ceil(segDuration * 1700) + 32) {
-        const vHere = nearestFlag(outTime, times, voiced);
+        const vHere = nearestFlag(outTime, times, voicedB);
         const pIn = inputPeriodAt(outTime, times, filledF0, defaultF0);
-        let shiftSemi = seg.shiftSemitones + seg.fineCents / 100 + lineOffsetAt(seg, times, outTime);
+        let shiftSemi = plan.shiftAt(outTime);
         if (!vHere) shiftSemi = 0;
         const ratio = Math.min(2.0, Math.max(0.5, Math.pow(2, shiftSemi / 12)));
         const pOut = pIn / ratio;
 
-        if (vHere && Math.abs(shiftSemi) >= 0.005) {
-          const absShift = Math.abs(shiftSemi);
+        // Inside a region every voiced cycle is resynthesised, even where the
+        // shift curve passes through 0 (e.g. a -2 -> +2 transition): leaving
+        // a gap there dropped the grain chain and briefly let the dry,
+        // differently phased original through.
+        if (vHere) {
           const bracket = bracketingSourceMarks(marks, outTime, sourceHint);
           sourceHint = bracket.index;
 
-          // For subtle correction, the nearest real cycle is the cleanest and
-          // cheapest choice. From ~1.5 semitones upward, crossfade neighboring
-          // source cycles in the grain domain. This avoids an obvious repeated
-          // single-cycle fingerprint while preserving each cycle's spectral
-          // envelope (and therefore the singer's vowel/formant character).
+          // Crossfade the two real source cycles around this instant in the
+          // grain domain. This avoids an obvious repeated single-cycle
+          // fingerprint while preserving each cycle's spectral envelope (the
+          // singer's vowel/formant character). It is used at every shift size:
+          // switching to a single nearest cycle below ~1.5 st made the texture
+          // change audibly mid-glide and measured less continuous.
           let sources;
-          if (absShift < 1.5 || !bracket.right || bracket.right === bracket.left) {
+          if (!bracket.right || bracket.right === bracket.left) {
             const found = nearestSourceMark(marks, outTime, sourceHint);
             sourceHint = found.index;
             sources = found.mark ? [{ mark: found.mark, gain: 1 }] : [];
@@ -1175,18 +1328,18 @@
       ? (times[times.length - 1] - times[0]) / (times.length - 1)
       : (pitchTrack.hopSize || 512) / sr;
     const hop = Math.max(1, Math.round(hopSec * sr));
+    const plan = opts.shiftPlan || buildShiftPlan(segments, pitchTrack, opts);
+    const voicedB = bridgeVoicing(voiced, 2);
     for (let fi = 0; fi < times.length; fi++) {
-      if (!voiced[fi]) continue;
-      const prevVoiced = fi > 0 ? !!voiced[fi - 1] : false;
-      const nextVoiced = fi + 1 < voiced.length ? !!voiced[fi + 1] : false;
+      if (!voicedB[fi]) continue;
+      const prevVoiced = fi > 0 ? !!voicedB[fi - 1] : false;
+      const nextVoiced = fi + 1 < voicedB.length ? !!voicedB[fi + 1] : false;
       if (!prevVoiced || !nextVoiced) continue;
       if (clarity && clarity.length > fi && clarity[fi] > 0 && clarity[fi] < 0.84) continue;
 
       const t = times[fi];
-      const seg = findSegmentAtTime(segments, t);
+      const seg = plan.regionAt(t);
       if (!seg) continue;
-      const shiftSemi = seg.shiftSemitones + seg.fineCents / 100 + lineOffsetAt(seg, times, t);
-      if (Math.abs(shiftSemi) < 0.005) continue;
 
       const center = Math.round(t * sr);
       if (guideSignal && f0s && f0s[fi] > 0) {
@@ -1196,8 +1349,8 @@
         if (periodicity < 0.30) continue;
       }
 
-      // Never let a frame spill across its note boundary: the neighbouring
-      // note has a different (or no) shift and no grains of this note.
+      // Never let a frame spill outside its resynthesis region, where no
+      // grains exist.
       const lo = Math.max(0, center - (hop >> 1), Math.round(seg.startTime * sr));
       const hi = Math.min(n, center + ((hop + 1) >> 1), Math.round(seg.endTime * sr));
       for (let i = lo; i < hi; i++) mask[i] = 1;
@@ -1246,18 +1399,12 @@
   // clearly attenuated edited regions using a shared, slowly changing gain.
   // The same gain on every channel preserves the stereo image, and the sparse
   // frame table avoids another full-length audio buffer on mobile devices.
-  function restoreEditedLevel(channels, outputs, blend, sr) {
+  function restoreEditedLevel(channels, outputs, blend, sr, guide) {
     const n = outputs[0].length;
     // A 20 ms window hides the short cancellation at a wet/dry boundary.
     // Use 5 ms frames so a single attenuated transition can be restored.
     const hop = Math.max(1, Math.round(sr * 0.005));
     const radius = hop;
-    let guide = 0, bestEnergy = -1;
-    for (let c = 0; c < channels.length; c++) {
-      let energy = 0;
-      for (let i = 0; i < n; i += 16) energy += channels[c][i] * channels[c][i];
-      if (energy > bestEnergy) { bestEnergy = energy; guide = c; }
-    }
     const dry = channels[guide], wet = outputs[guide];
     const gains = new Float32Array(Math.ceil(n / hop) + 1);
     gains.fill(1);
@@ -1286,7 +1433,7 @@
   // High-level: resynthesize one or more channels given the current
   // segment edits. The PSOLA render is blended only into edited voiced areas;
   // everywhere else remains sample-for-sample original.
-  function resynthesize(channels, sr, pitchTrack, segments, opts) {
+  function resynthesizeCore(channels, sr, pitchTrack, segments, opts) {
     const n = channels[0].length;
     // Fast path: a file can contain many detected notes while none are edited.
     // Avoid even building the mono guide in that case.
@@ -1294,8 +1441,10 @@
     for (const seg of segments) { if (segmentHasPitchEdit(seg)) { hasAnyEdit = true; break; } }
     if (!hasAnyEdit) return channels.map((ch) => Float32Array.from(ch));
 
-    const guideSignal = makePsolaGuide(channels);
+    const guide = guideChannelIndex(channels, opts);
+    const guideSignal = makePsolaGuide(channels, guide);
     const sharedOpts = Object.assign({}, opts || {}, { guideSignal });
+    sharedOpts.shiftPlan = buildShiftPlan(segments, pitchTrack, sharedOpts);
     const schedule = buildGrainSchedule(sr, n, pitchTrack, segments, sharedOpts);
     const blend = limitBlendToCoverage(buildResynthBlendMask(sr, n, pitchTrack, segments, sharedOpts), schedule.cells, sr);
     let anyWet = false;
@@ -1312,22 +1461,79 @@
       }
       return out;
     });
-    return restoreEditedLevel(channels, outputs, blend, sr);
+    return restoreEditedLevel(channels, outputs, blend, sr, guide);
   }
 
+
+  // Key/scale snapping for the correction target. `scale` is a name from
+  // SCALES; `root` is a pitch class 0-11 (C=0). Chromatic behaves like a plain
+  // round(). Ties between two equally distant scale notes resolve upward.
+  const SCALES = {
+    chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    major: [0, 2, 4, 5, 7, 9, 11],
+    minor: [0, 2, 3, 5, 7, 8, 10],
+    harmonicMinor: [0, 2, 3, 5, 7, 8, 11],
+    pentatonicMajor: [0, 2, 4, 7, 9],
+    pentatonicMinor: [0, 3, 5, 7, 10],
+  };
+
+  function snapToScale(midi, root, scale) {
+    const degrees = SCALES[scale] || SCALES.chromatic;
+    if (!Number.isFinite(midi)) return midi;
+    const base = Math.floor(midi);
+    let best = Math.round(midi), bestDist = Infinity;
+    for (let m = base - 12; m <= base + 13; m++) {
+      const pc = ((m - root) % 12 + 12) % 12;
+      if (!degrees.includes(pc)) continue;
+      const d = Math.abs(m - midi);
+      if (d < bestDist - 1e-9 || (Math.abs(d - bestDist) <= 1e-9 && m > best)) { best = m; bestDist = d; }
+    }
+    return best;
+  }
+
+  // Muted notes are silenced after rendering so they work with or without any
+  // pitch edit. The 5 ms ramps stay inside the note: nothing outside it changes.
+  function applyMutes(outputs, sr, segments) {
+    const n = outputs[0].length;
+    const fade = Math.max(1, Math.round(sr * 0.005));
+    for (const seg of segments) {
+      if (!seg.muted) continue;
+      const a = Math.max(0, Math.round(seg.startTime * sr));
+      const b = Math.min(n, Math.round(seg.endTime * sr));
+      if (b <= a) continue;
+      const f = Math.min(fade, (b - a) >> 1);
+      for (const out of outputs) {
+        for (let i = a; i < b; i++) {
+          const d = Math.min(i - a, b - 1 - i);
+          out[i] *= d >= f ? 0 : 1 - (d + 1) / (f + 1);
+        }
+      }
+    }
+    return outputs;
+  }
+
+  function resynthesize(channels, sr, pitchTrack, segments, opts) {
+    return applyMutes(resynthesizeCore(channels, sr, pitchTrack, segments, opts), sr, segments);
+  }
+
+  async function resynthesizeChunked(channels, sr, pitchTrack, segments, opts) {
+    return applyMutes(await resynthesizeChunkedCore(channels, sr, pitchTrack, segments, opts), sr, segments);
+  }
 
   // iOS full-render path: same PSOLA schedule/blend math as resynthesize(),
   // but overlap-add is accumulated in bounded blocks. This removes the two
   // full-length Float64 work arrays per channel and yields between blocks.
-  async function resynthesizeChunked(channels, sr, pitchTrack, segments, opts) {
+  async function resynthesizeChunkedCore(channels, sr, pitchTrack, segments, opts) {
     opts = opts || {};
     const n = channels[0].length;
     let hasAnyEdit = false;
     for (const seg of segments) { if (segmentHasPitchEdit(seg)) { hasAnyEdit = true; break; } }
     if (!hasAnyEdit) return channels.map((ch) => Float32Array.from(ch));
 
-    const guideSignal = makePsolaGuide(channels);
+    const guide = guideChannelIndex(channels, opts);
+    const guideSignal = makePsolaGuide(channels, guide);
     const sharedOpts = Object.assign({}, opts, { guideSignal });
+    sharedOpts.shiftPlan = buildShiftPlan(segments, pitchTrack, sharedOpts);
     const schedule = buildGrainSchedule(sr, n, pitchTrack, segments, sharedOpts);
     const blend = limitBlendToCoverage(buildResynthBlendMask(sr, n, pitchTrack, segments, sharedOpts), schedule.cells, sr);
     let anyWet = false;
@@ -1385,7 +1591,7 @@
       // Safari gets a paint/input opportunity without changing DSP boundaries.
       await new Promise(requestAnimationFrame);
     }
-    return restoreEditedLevel(channels, outputs, blend, sr);
+    return restoreEditedLevel(channels, outputs, blend, sr, guide);
   }
 
   // ============================================================
@@ -1489,7 +1695,8 @@
     yinPitchTrack,
     freqToMidi, midiToFreq, midiToNoteName, NOTE_NAMES,
     segmentNotes, splitSegment, suggestFromReference,
-    buildGrainSchedule, applyGrainSchedule, resynthesize, resynthesizeChunked, makeWinCache,
+    buildGrainSchedule, applyGrainSchedule, resynthesize, resynthesizeChunked, snapToScale, SCALES, makeWinCache,
+    resynthRegions, guideChannelIndex, PITCH_TRANSITION_SEC,
     encodeWav, encodeWavChunked,
   };
 

@@ -24,6 +24,30 @@ function lowFormantVoice(seed=20) {
   }
   return a;
 }
+// A glottal-pulse vowel with a single strong formant. When that formant sits
+// at (about) twice f0, its energy can make YIN report exactly an octave too
+// high (observed on synthetic "e"/"o"-like vowels around C4).
+function glottalVowel(f0, F1, B1=90, sec=.9, seed=5) {
+  const N=Math.round(sr*sec), src=new Float64Array(N);
+  let phase=0, seedState=seed;
+  const rand=()=>{seedState=(1664525*seedState+1013904223)>>>0; return seedState/4294967296;};
+  for(let i=0;i<N;i++){
+    const t=i/sr;
+    phase+=f0/sr; if(phase>=1) phase-=1;
+    const op=.42, cl=.16; let gp;
+    if(phase<op) gp=.5-.5*Math.cos(Math.PI*phase/op);
+    else if(phase<op+cl) gp=Math.cos(Math.PI/2*(phase-op)/cl);
+    else gp=0;
+    const env=Math.min(1,t/.03,(sec-t)/.03);
+    src[i]=gp*env+.01*(rand()-.5)*env;
+  }
+  const d=new Float64Array(N); for(let n=1;n<N;n++) d[n]=src[n]-src[n-1];
+  const R=Math.exp(-Math.PI*B1/sr), a1=-2*R*Math.cos(2*Math.PI*F1/sr), a2=R*R;
+  let y1=0, y2=0; const out=new Float64Array(N);
+  for(let n=0;n<N;n++){ const y=d[n]-a1*y1-a2*y2; y2=y1; y1=y; out[n]=y; }
+  let pk=0; for(const v of out) pk=Math.max(pk,Math.abs(v));
+  return Float32Array.from(out, v=>.5*v/pk);
+}
 // Glottal-pulse vowel through formant resonators; consecutive notes glide
 // into each other (legato), so edited note boundaries sit inside voicing.
 function legatoVoice(semis,base=196,noteSec=.45){
@@ -135,6 +159,51 @@ async function main(){
   }
   plainErr.sort((a,b)=>a-b);
   assert(plainErr.length>5&&plainErr[Math.floor(plainErr.length*.9)]<30,`plain app segment edit pitch p90 ${plainErr[Math.floor(plainErr.length*.9)]} cents`);
+  // Smooth note transitions. Moving one legato note used to switch its
+  // shift instantly at the boundary (a pitch step), and every note restarted
+  // its own grain chain, so even a uniform edit broke the waveform there.
+  const plainOf=(s,shift)=>({startFrame:s.startFrame,endFrame:s.endFrame,startTime:s.startTime,endTime:s.endTime,shiftSemitones:shift,fineCents:0,lineOffsets:null,autoCurve:false});
+  const fineOpts={frameSize:1024,hopSize:64,fmin:90};
+  const glideOut=PE.resynthesize([phrase],sr,phraseTrack,phraseSegs.map((s,k)=>plainOf(s,k===2?2:0)))[0];
+  const glideTrack=PE.yinPitchTrack(glideOut,sr,fineOpts),glideSource=PE.yinPitchTrack(phrase,sr,fineOpts);
+  let worstStep=0,lostVoicing=0;
+  for(const b of [phraseSegs[2].startTime,phraseSegs[3].startTime]){
+    let prev=null;
+    for(let i=0;i<glideTrack.times.length;i++){
+      const t=glideTrack.times[i];if(t<b-.06||t>b+.06)continue;
+      // An instant step reads as a burst of unvoiced frames, not a jump.
+      if(glideSource.voiced[i]&&!glideTrack.voiced[i])lostVoicing++;
+      if(!glideTrack.voiced[i]){prev=null;continue;}
+      const m=PE.freqToMidi(glideTrack.f0s[i]);
+      if(prev!=null){let d=m-prev;d-=12*Math.round(d/12);worstStep=Math.max(worstStep,Math.abs(d));}
+      prev=m;
+    }
+  }
+  assert(worstStep<0.6&&lostVoicing<=2,`edited note boundary is not continuous: ${(worstStep*100).toFixed(0)} cent step, ${lostVoicing} frames lost periodicity`);
+  // Equal shifts on neighbouring notes must render exactly like one note.
+  const merged=[Object.assign(plainOf(phraseSegs[0],3),{endFrame:phraseSegs[phraseSegs.length-1].endFrame,endTime:phraseSegs[phraseSegs.length-1].endTime})];
+  const uniformOut=PE.resynthesize([phrase],sr,phraseTrack,phraseSegs.map(s=>plainOf(s,3)))[0];
+  const mergedOut=PE.resynthesize([phrase],sr,phraseTrack,merged)[0];
+  assert(maxDiff(mergedOut,uniformOut)<1e-6,'uniform edit restarts the grain chain at note boundaries');
+  // A local render covering a whole resynthesis span, with the song's guide
+  // channel, must match the full render there (the app's per-note path).
+  const stereoPhrase=[phrase,Float32Array.from(phrase,(v,i)=>.8*v+.2*(phrase[i-331]||0))];
+  const localEdits=phraseSegs.map((s,k)=>plainOf(s,[1,-1,2,0,0][k]||0));
+  const fullStereo=PE.resynthesize(stereoPhrase,sr,phraseTrack,localEdits,{guideChannel:0});
+  const span=PE.resynthRegions(localEdits,phraseTrack)[0];
+  const w0=Math.max(0,span.startTime-.05),w1=span.endTime+.05,s0=Math.round(w0*sr),s1=Math.round(w1*sr);
+  const f0=phraseTrack.times.findIndex(t=>t>=w0);let f1=phraseTrack.times.findIndex(t=>t>w1);if(f1<0)f1=phraseTrack.times.length;
+  const localTrack={times:phraseTrack.times.slice(f0,f1).map(t=>t-s0/sr),f0s:phraseTrack.f0s.slice(f0,f1),voiced:phraseTrack.voiced.slice(f0,f1),clarity:phraseTrack.clarity.slice(f0,f1),hopSize:phraseTrack.hopSize};
+  const localSegs=localEdits.filter(s=>s.endTime>w0&&s.startTime<w1).map(s=>Object.assign({},s,{startFrame:Math.max(0,s.startFrame-f0),endFrame:Math.min(f1-f0,s.endFrame-f0),startTime:s.startTime-s0/sr,endTime:s.endTime-s0/sr}));
+  const localStereo=PE.resynthesize(stereoPhrase.map(c=>c.slice(s0,s1)),sr,localTrack,localSegs,{guideChannel:0});
+  let localErr=0,localPow=0;
+  for(let c=0;c<2;c++)for(let i=0;i<s1-s0;i++){const e=localStereo[c][i]-fullStereo[c][s0+i];localErr+=e*e;localPow+=fullStereo[c][s0+i]**2;}
+  assert(10*Math.log10(localErr/localPow)<-40,`local render differs from full render by ${(10*Math.log10(localErr/localPow)).toFixed(1)} dB`);
+  // Do not glide into a neighbour whose pitch jumps implausibly (usually an
+  // analysis octave error): resynthesising it with a wrong period is worse.
+  const octaveTrack2={...phraseTrack,f0s:Float64Array.from(phraseTrack.f0s,(f,i)=>i>=phraseSegs[3].startFrame&&i<phraseSegs[3].endFrame?f*2:f)};
+  const octaveSpans=PE.resynthRegions(phraseSegs.map((s,k)=>plainOf(s,k===2?2:0)),octaveTrack2);
+  assert(octaveSpans.length===1&&Math.abs(octaveSpans[0].endTime-phraseSegs[2].endTime)<1e-9,'transition extended into an octave-jump neighbour');
   // An octave-down edit must actually sound an octave lower. Normalising by a
   // near-zero overlap sum restored the original period between grains.
   const octaveSeg=phraseSegs[2];
@@ -146,6 +215,25 @@ async function main(){
   }
   octaveErr.sort((a,b)=>a-b);
   assert(octaveErr.length>5&&octaveErr[octaveErr.length>>1]<30,`octave-down edit pitch error ${octaveErr[octaveErr.length>>1]} cents`);
+  // A vowel whose only strong formant sits at ~2x f0 (an "e"/"o"-like shape
+  // around C4) previously made YIN report exactly an octave too high on
+  // every frame -- the note displayed, corrected and exported wrong.
+  const secondHarmonicVowel=glottalVowel(261.63,523.26);
+  const shTrack=PE.yinPitchTrack(secondHarmonicVowel,sr,{frameSize:2048,hopSize:512,fmin:70,fmax:1000,threshold:0.15});
+  const shVoiced=[]; for(let i=0;i<shTrack.f0s.length;i++) if(shTrack.voiced[i]) shVoiced.push(shTrack.f0s[i]);
+  shVoiced.sort((a,b)=>a-b);
+  assert(shVoiced.length>10,'formant-dominant vowel produced too few voiced frames');
+  const shMedian=shVoiced[shVoiced.length>>1];
+  assert(Math.abs(1200*Math.log2(shMedian/261.63))<50,`formant-dominant vowel detected an octave error: ${shMedian.toFixed(1)} Hz (expected ~261.6 Hz)`);
+  // A genuinely high, cleanly periodic tone must not be second-guessed down
+  // an octave just because CMNDF also dips at its own doubled period.
+  for(const cleanF0 of [261.63,349.23,440,523.25,659.26]){
+    const cleanTrack=PE.yinPitchTrack(sine(cleanF0,.5),sr);
+    const cleanVoiced=[]; for(let i=0;i<cleanTrack.f0s.length;i++) if(cleanTrack.voiced[i]) cleanVoiced.push(cleanTrack.f0s[i]);
+    cleanVoiced.sort((a,b)=>a-b);
+    const cleanMedian=cleanVoiced[cleanVoiced.length>>1];
+    assert(Math.abs(1200*Math.log2(cleanMedian/cleanF0))<20,`clean tone ${cleanF0} Hz was second-guessed to ${cleanMedian?.toFixed(1)} Hz`);
+  }
   // iPhone long files analyse a 2x downsampled copy; analysis hop samples
   // must not be reused as output-rate samples when building the wet mask.
   const halfRate=Float32Array.from({length:phrase.length>>1},(_,i)=>(phrase[2*i]+phrase[2*i+1])/2);
@@ -223,6 +311,30 @@ async function main(){
   assert(progress.length>=10&&progress.every(m=>m.type==='progress'&&m.id===13),'worker analysis progress missing');
   assert(progress.every((m,i)=>m.fraction>=0&&m.fraction<1&&(i===0||m.fraction>progress[i-1].fraction)),'analysis progress is not monotonic');
   assert.equal(messages[messages.length-1].type,'analyzed');assert.equal(messages[messages.length-1].id,13);
+  // Key/scale snapping and per-note mute.
+  assert.equal(PE.snapToScale(61.4,0,'chromatic'),61);
+  assert.equal(PE.snapToScale(61.4,0,'major'),62,'C# is not in C major: 61.4 goes to D');
+  assert.equal(PE.snapToScale(60.6,0,'major'),60,'60.6 is nearer C than D in C major');
+  assert.equal(PE.snapToScale(63.2,0,'major'),64,'Eb is out of C major; 63.2 goes to E');
+  assert.equal(PE.snapToScale(63.2,0,'minor'),63,'Eb is in C minor');
+  assert.equal(PE.snapToScale(70.4,9,'pentatonicMinor'),69,'A minor pentatonic has A but no Bb');
+  assert.equal(PE.snapToScale(59.6,0,'major'),60,'octave boundaries snap across octaves');
+  {
+    const tone=sine(261.63,1.0);
+    const track=PE.yinPitchTrack(tone,sr);
+    const segs=[{startFrame:0,endFrame:track.times.length,startTime:track.times[0],endTime:track.times[track.times.length-1],shiftSemitones:0,fineCents:0,lineOffsets:null,muted:true}];
+    const from=Math.round(.3*sr), to=Math.round(.7*sr);
+    segs[0].startTime=.3; segs[0].endTime=.7;
+    for(const fn of ['resynthesize','resynthesizeChunked']){
+      const out=await PE[fn]([tone],sr,track,segs,{});
+      let mid=0,outside=0;
+      for(let i=from+300;i<to-300;i++) mid=Math.max(mid,Math.abs(out[0][i]));
+      for(let i=0;i<from-10;i++) outside=Math.max(outside,Math.abs(out[0][i]-tone[i]));
+      for(let i=to+10;i<tone.length;i++) outside=Math.max(outside,Math.abs(out[0][i]-tone[i]));
+      assert.equal(mid,0,`${fn}: muted note is not silent`);
+      assert.equal(outside,0,`${fn}: mute changed audio outside the note`);
+    }
+  }
   console.log(`regression PASS: edit→F0 ${outputPitch.toFixed(2)} Hz; vibrato spread ${spreadIn.toFixed(3)}→${spreadOut.toFixed(3)} st; unvoiced max Δ ${noiseDelta}; boundary step ${sourceStep.toFixed(4)}→${outputStep.toFixed(4)}; stereo drift ${stereoError}; reference alignment; standard/chunked max Δ ${difference}; stereo WAV header; worker analyze`);
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
