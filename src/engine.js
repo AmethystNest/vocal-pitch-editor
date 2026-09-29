@@ -109,6 +109,46 @@
         midi[i] = freqToMidi(f0s[i]);
       }
     }
+
+    // A burst of 2-4 consecutive frames (~25-45 ms) sits an octave off while
+    // the voiced frames on both sides agree with each other. The frame-wise
+    // pass above cannot see it: the burst's own frames serve as each other's
+    // anchor, and the two anchors then disagree. Nobody sings an octave
+    // excursion this short between two equal pitches, so it is an analysis
+    // error (seen at note ends where the vowel fades); a sustained octave
+    // jump is far longer than this and is left alone.
+    for (let i = 0; i < n; i++) {
+      if (!voiced[i] || !(f0s[i] > 0)) continue;
+      const li = nearestVoiced(i, -1, 3);
+      if (li < 0 || !Number.isFinite(midi[li])) continue;
+      const lm = midi[li];
+      for (let len = 2; len <= 4; len++) {
+        const j = i + len - 1;
+        if (j >= n) break;
+        let contiguous = true;
+        for (let k = i; k <= j; k++) if (!voiced[k] || !(f0s[k] > 0)) { contiguous = false; break; }
+        if (!contiguous) break;
+        const ri = nearestVoiced(j, +1, 3);
+        if (ri < 0 || !Number.isFinite(midi[ri]) || Math.abs(lm - midi[ri]) > 1.6) continue;
+        const anchor = 0.5 * (lm + midi[ri]);
+        const anchorClarity = clarity && clarity.length ? Math.max(clarity[li] || 0, clarity[ri] || 0) : 0;
+        let octaves = null, ok = true;
+        for (let k = i; k <= j && ok; k++) {
+          const delta = midi[k] - anchor;
+          const o = Math.round(delta / 12);
+          if (o === 0 || Math.abs(o) > 2 || Math.abs(delta - 12 * o) > 1.35 || (octaves !== null && o !== octaves)) ok = false;
+          else if (clarity && clarity.length && clarity[k] > anchorClarity + 0.12) ok = false;
+          octaves = o;
+        }
+        if (!ok) continue;
+        for (let k = i; k <= j; k++) {
+          f0s[k] /= Math.pow(2, octaves);
+          midi[k] = freqToMidi(f0s[k]);
+        }
+        i = j;
+        break;
+      }
+    }
   }
 
   function yinPitchTrack(signal, sr, opts) {
@@ -1832,7 +1872,7 @@
     yinPitchTrack,
     freqToMidi, midiToFreq, midiToNoteName, NOTE_NAMES,
     segmentNotes, splitSegment, suggestFromReference,
-    featherMask, buildGrainSchedule, applyGrainSchedule, resynthesize, resynthesizeChunked, snapToScale, SCALES, makeWinCache, MAX_FORMANT_ST,
+    featherMask, stabilizeOctaveErrors, buildGrainSchedule, applyGrainSchedule, resynthesize, resynthesizeChunked, snapToScale, SCALES, makeWinCache, MAX_FORMANT_ST,
     resynthRegions, guideChannelIndex, PITCH_TRANSITION_SEC,
     encodeWav, encodeWavChunked,
   };

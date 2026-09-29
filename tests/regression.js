@@ -357,6 +357,25 @@ async function main(){
     let dmax=0;for(let i=0;i<a.length;i++)dmax=Math.max(dmax,Math.abs(a[i]-b[i]));
     assert(dmax<1e-4,`standard and chunked formant renders differ by ${dmax}`);
   }
+  // Octave-error repair: short bursts (1-4 frames) between two agreeing anchors are fixed;
+  // a sustained octave jump (or a burst too long to be an analysis slip) is left alone.
+  {
+    const mk=(len)=>{const f=new Float64Array(len).fill(270),v=new Uint8Array(len).fill(1),c=new Float64Array(len).fill(0.97);
+      return {f,v,c,burst:(from,to,factor)=>{for(let i=from;i<=to;i++){f[i]=270*factor;c[i]=0.87;}}};};
+    for(const burstLen of [1,2,3,4]){
+      const t=mk(24); t.burst(9,8+burstLen,2); PE.stabilizeOctaveErrors(t.f,t.v,t.c);
+      for(let i=0;i<24;i++) assert(Math.abs(t.f[i]-270)<1,`octave burst of ${burstLen} frame(s) left at ${t.f[i]} (frame ${i})`);
+    }
+    const down=mk(24); down.burst(9,10,0.5); PE.stabilizeOctaveErrors(down.f,down.v,down.c);
+    for(let i=0;i<24;i++) assert(Math.abs(down.f[i]-270)<1,'2-frame octave-down burst not repaired');
+    const long=mk(24); long.burst(9,14,2); PE.stabilizeOctaveErrors(long.f,long.v,long.c);
+    assert(long.f[9]>500&&long.f[14]>500,'a 6-frame octave excursion must not be rewritten');
+    const jump=mk(24); jump.burst(9,23,2); PE.stabilizeOctaveErrors(jump.f,jump.v,jump.c);
+    assert(jump.f[9]>500&&jump.f[23]>500,'a sustained octave jump must not be rewritten');
+    // anchors that disagree (a real 5-semitone step) leave a short different-pitch run alone
+    const step=mk(24); for(let i=9;i<=10;i++) step.f[i]=270*Math.pow(2,5/12); PE.stabilizeOctaveErrors(step.f,step.v,step.c);
+    assert(Math.abs(step.f[9]-270*Math.pow(2,5/12))<1,'a real short step was treated as an octave error');
+  }
   // Key/scale snapping and per-note mute.
   assert.equal(PE.snapToScale(61.4,0,'chromatic'),61);
   assert.equal(PE.snapToScale(61.4,0,'major'),62,'C# is not in C major: 61.4 goes to D');
