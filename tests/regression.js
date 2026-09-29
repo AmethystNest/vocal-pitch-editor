@@ -311,6 +311,52 @@ async function main(){
   assert(progress.length>=10&&progress.every(m=>m.type==='progress'&&m.id===13),'worker analysis progress missing');
   assert(progress.every((m,i)=>m.fraction>=0&&m.fraction<1&&(i===0||m.fraction>progress[i-1].fraction)),'analysis progress is not monotonic');
   assert.equal(messages[messages.length-1].type,'analyzed');assert.equal(messages[messages.length-1].id,13);
+  // featherMask must equal the plain sliding box filter it replaced, sample for sample.
+  {
+    const ref=(mask,fade)=>{const n=mask.length,sm=new Float32Array(n),win=fade*2+1;let acc=0;
+      for(let i=0;i<n+fade;i++){acc+=(i<n?mask[i]:0)-(i-win>=0?mask[i-win]:0);const o=i-fade;if(o>=0&&o<n)sm[o]=Math.min(1,acc/Math.max(1,fade));}return sm;};
+    let seedState=9;const rnd=()=>{seedState=(1664525*seedState+1013904223)>>>0;return seedState/4294967296;};
+    for(let k=0;k<400;k++){
+      const n=Math.floor(rnd()*3000),fade=[8,10,384,3][k%4],flip=[0.5,0.001,0.01,0.05,0.2][k%5];
+      const m=new Float32Array(n);let v=rnd()<.5?1:0;
+      for(let i=0;i<n;i++){if(rnd()<flip)v=1-v;m[i]=v;}
+      const a=ref(m,fade),b=PE.featherMask(m,fade);
+      for(let i=0;i<n;i++) assert.equal(b[i],a[i],`featherMask differs at ${i} (n=${n}, fade=${fade})`);
+    }
+  }
+  // Formant shift moves the spectral envelope, not the pitch.
+  {
+    const f0=100,F1=900,x=glottalVowel(f0,F1,90,1.2);
+    const opt={frameSize:2048,hopSize:512,fmin:70,fmax:1000,threshold:0.15};
+    const tr=PE.yinPitchTrack(x,sr,opt), segs=PE.segmentNotes(tr);
+    const envPeak=(sig,pitch)=>{const a=Math.round(.35*sr),b=Math.round(.85*sr),H=[];
+      for(let k=1;k*pitch<2500;k++){const f=k*pitch;if(f<450)continue;let re=0,im=0;
+        for(let i=a;i<b;i++){const w=.5-.5*Math.cos(2*Math.PI*(i-a)/(b-a)),ph=2*Math.PI*f*i/sr;re+=sig[i]*w*Math.cos(ph);im-=sig[i]*w*Math.sin(ph);}
+        H.push([f,Math.hypot(re,im)]);}
+      let bi=0;for(let k=1;k<H.length;k++)if(H[k][1]>H[bi][1])bi=k;
+      const l=Math.log(H[bi-1][1]),m=Math.log(H[bi][1]),r=Math.log(H[bi+1][1]);
+      return H[bi][0]+0.5*(l-r)/(l-2*m+r)*pitch;};
+    const render=(fs,ps)=>{
+      const edits=segs.map(g=>({startFrame:g.startFrame,endFrame:g.endFrame,startTime:g.startTime,endTime:g.endTime,shiftSemitones:ps,fineCents:0,lineOffsets:null,formantSemitones:fs}));
+      const [y]=PE.resynthesize([x],sr,tr,edits);
+      const ot=PE.yinPitchTrack(y,sr,opt),v=[];
+      for(let i=0;i<ot.f0s.length;i++) if(ot.voiced[i]&&ot.times[i]>.3&&ot.times[i]<.9) v.push(ot.f0s[i]);
+      v.sort((p,q)=>p-q);const f=v[v.length>>1];
+      return {f0:f,peak:envPeak(y,f)};};
+    const base=envPeak(x,f0);
+    assert(Math.abs(base-F1)/F1<.05,`test vowel formant not where expected: ${base}`);
+    const up=render(3,0), down=render(-3,0), pitchOnly=render(0,2), both=render(3,2);
+    assert(Math.abs(1200*Math.log2(up.f0/f0))<15&&Math.abs(1200*Math.log2(down.f0/f0))<15,`formant shift changed the pitch: ${up.f0} / ${down.f0}`);
+    assert(up.peak/base>1.12&&up.peak/base<1.35,`+3 st formant moved the envelope by x${(up.peak/base).toFixed(3)} (expected about 1.19)`);
+    assert(down.peak/base<.92&&down.peak/base>.72,`-3 st formant moved the envelope by x${(down.peak/base).toFixed(3)} (expected about 0.84)`);
+    assert(Math.abs(pitchOnly.peak/base-1)<.06,`a pitch-only edit moved the formant by x${(pitchOnly.peak/base).toFixed(3)}`);
+    assert(Math.abs(1200*Math.log2(both.f0/(f0*Math.pow(2,2/12))))<15&&both.peak/base>1.1,'pitch and formant edits together are not independent');
+    // both render paths agree
+    const editsC=segs.map(g=>({startFrame:g.startFrame,endFrame:g.endFrame,startTime:g.startTime,endTime:g.endTime,shiftSemitones:0,fineCents:0,lineOffsets:null,formantSemitones:3}));
+    const [a]=PE.resynthesize([x],sr,tr,editsC),[b]=await PE.resynthesizeChunked([x],sr,tr,editsC,{blockFrames:8192});
+    let dmax=0;for(let i=0;i<a.length;i++)dmax=Math.max(dmax,Math.abs(a[i]-b[i]));
+    assert(dmax<1e-4,`standard and chunked formant renders differ by ${dmax}`);
+  }
   // Key/scale snapping and per-note mute.
   assert.equal(PE.snapToScale(61.4,0,'chromatic'),61);
   assert.equal(PE.snapToScale(61.4,0,'major'),62,'C# is not in C major: 61.4 goes to D');
@@ -334,6 +380,21 @@ async function main(){
       assert.equal(mid,0,`${fn}: muted note is not silent`);
       assert.equal(outside,0,`${fn}: mute changed audio outside the note`);
     }
+  }
+  // Reference import progress: opt-in, monotonic pitch stage, then an align stage before the result.
+  {
+    const vocalTrack=PE.yinPitchTrack(sine(220,1.2),sr), vocalSegs=PE.segmentNotes(vocalTrack).map(g=>({startTime:g.startTime,endTime:g.endTime,startFrame:g.startFrame,endFrame:g.endFrame,noteMidi:g.noteMidi}));
+    const refMsg={type:'reference',refSignal:sine(246.94,1.2),refSr:sr,vocalPitchTrack:vocalTrack,vocalSegments:vocalSegs};
+    context.onmessage({data:Object.assign({id:20},refMsg)});
+    const plain=messages.filter(m=>m.id===20);
+    assert(plain.length===1&&plain[0].type==='referenced','reference sent progress without opting in');
+    context.onmessage({data:Object.assign({id:21,reportProgress:true},refMsg,{refSignal:sine(246.94,1.2)})});
+    const rp=messages.filter(m=>m.id===21);
+    const pitch=rp.filter(m=>m.type==='progress'&&m.stage==='pitch'), align=rp.filter(m=>m.type==='progress'&&m.stage==='align');
+    assert(pitch.length>=5&&pitch.every((m,i)=>m.fraction>=0&&m.fraction<1&&(i===0||m.fraction>pitch[i-1].fraction)),'reference pitch progress missing or not monotonic');
+    assert.equal(align.length,1,'reference align stage missing');
+    assert.equal(rp[rp.length-1].type,'referenced');
+    assert(rp.indexOf(align[0])>rp.indexOf(pitch[pitch.length-1]),'align stage came before pitch progress finished');
   }
   console.log(`regression PASS: edit→F0 ${outputPitch.toFixed(2)} Hz; vibrato spread ${spreadIn.toFixed(3)}→${spreadOut.toFixed(3)} st; unvoiced max Δ ${noiseDelta}; boundary step ${sourceStep.toFixed(4)}→${outputStep.toFixed(4)}; stereo drift ${stereoError}; reference alignment; standard/chunked max Δ ${difference}; stereo WAV header; worker analyze`);
 }

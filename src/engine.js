@@ -938,6 +938,7 @@
   // original waveform and also cuts a large amount of work on phones.
   function segmentHasPitchEdit(seg) {
     if (!seg) return false;
+    if (Math.abs(seg.formantSemitones || 0) >= 0.005) return true;
     if (Math.abs((seg.shiftSemitones || 0) + (seg.fineCents || 0) / 100) >= 0.005) return true;
     if (seg.lineOffsets) {
       for (let i = 0; i < seg.lineOffsets.length; i++) {
@@ -1026,11 +1027,37 @@
     if (!signal || signal.length < 32) return 1;
     const p = Math.max(8, Math.round(periodSamples));
     const radius = Math.max(1, Math.round(p * 0.08));
+    const winLo = Math.round(center - p * 0.75);
+    const hi = Math.min(signal.length, Math.round(center + p * 0.75));
+    const minLag = Math.max(4, p - radius), maxLag = Math.max(4, p + radius);
     let best = -1;
+    // Common case: the analysis window does not touch the start of the file,
+    // so it is the same for every lag. Then x's energy is computed once and
+    // the lagged energy slides by one sample per lag instead of being summed
+    // from scratch (~3x fewer multiply-adds; same values up to rounding).
+    if (winLo >= maxLag && hi - winLo >= Math.max(8, p * 0.45)) {
+      const lo = winLo;
+      let xx = 0, yy = 0;
+      for (let i = lo; i < hi; i++) {
+        const x = signal[i], y = signal[i - minLag];
+        xx += x * x; yy += y * y;
+      }
+      for (let lag = minLag; lag <= maxLag; lag++) {
+        if (lag > minLag) {
+          // window of y moves from [lo-lag+1, hi-lag+1) to [lo-lag, hi-lag)
+          const enter = signal[lo - lag], leave = signal[hi - lag];
+          yy += enter * enter - leave * leave;
+        }
+        let xy = 0;
+        for (let i = lo; i < hi; i++) xy += signal[i] * signal[i - lag];
+        const c = xy / (Math.sqrt(xx * Math.max(yy, 0)) + 1e-12);
+        if (c > best) best = c;
+      }
+      return Math.max(0, Math.min(1, best));
+    }
     for (let d = -radius; d <= radius; d++) {
       const lag = Math.max(4, p + d);
-      const lo = Math.max(lag, Math.round(center - p * 0.75));
-      const hi = Math.min(signal.length, Math.round(center + p * 0.75));
+      const lo = Math.max(lag, winLo);
       if (hi - lo < Math.max(8, p * 0.45)) continue;
       let xy = 0, xx = 0, yy = 0;
       for (let i = lo; i < hi; i++) {
@@ -1111,19 +1138,23 @@
       while (lo <= hi) { const m = (lo + hi) >> 1; if (starts[m] <= t) { idx = m; lo = m + 1; } else hi = m - 1; }
       return idx;
     }
-    function inTrans(tr, t) {
+    function inTrans(tr, t, f) {
       if (!tr || t < tr.lo || t > tr.hi) return null;
       const w = 0.5 - 0.5 * Math.cos(Math.PI * (t - tr.lo) / (tr.hi - tr.lo));
-      return (1 - w) * base(tr.a, t) + w * base(tr.b, t);
+      return (1 - w) * f(tr.a, t) + w * f(tr.b, t);
     }
-    function shiftAt(t) {
+    function curveAt(t, f) {
       const j = indexAt(t);
-      let v = j >= 1 ? inTrans(trans[j - 1], t) : null;
-      if (v == null && j >= 0) v = inTrans(trans[j], t);
+      let v = j >= 1 ? inTrans(trans[j - 1], t, f) : null;
+      if (v == null && j >= 0) v = inTrans(trans[j], t, f);
       if (v != null) return v;
-      if (j >= 0 && t < ordered[j].endTime && edited[j]) return base(ordered[j], t);
+      if (j >= 0 && t < ordered[j].endTime && edited[j]) return f(ordered[j], t);
       return 0;
     }
+    const shiftAt = (t) => curveAt(t, base);
+    // Formant shift (semitones of spectral-envelope movement) follows the same
+    // note-to-note transition as pitch, so a vowel colour never jumps.
+    const formantAt = (t) => curveAt(t, (seg) => seg.formantSemitones || 0);
     const regions = [];
     for (let i = 0; i < ordered.length; i++) {
       if (!edited[i]) continue;
@@ -1148,7 +1179,7 @@
       for (const r of regions) if (t >= r.startTime && t < r.endTime) return r;
       return null;
     }
-    return { shiftAt, regions, regionAt };
+    return { shiftAt, formantAt, regions, regionAt };
   }
 
   // Time spans that resynthesis renders as one continuous grain schedule.
@@ -1203,6 +1234,10 @@
         if (!vHere) shiftSemi = 0;
         const ratio = Math.min(2.0, Math.max(0.5, Math.pow(2, shiftSemi / 12)));
         const pOut = pIn / ratio;
+        // Spectral-envelope (formant) ratio for this instant; 1 = untouched.
+        // Not applied where the shift is suppressed for an unvoiced frame.
+        const formantSemi = vHere ? Math.max(-MAX_FORMANT_ST, Math.min(MAX_FORMANT_ST, plan.formantAt(outTime))) : 0;
+        const fmtRatio = Math.pow(2, formantSemi / 12);
 
         // Inside a region every voiced cycle is resynthesised, even where the
         // shift curve passes through 0 (e.g. a -2 -> +2 transition): leaving
@@ -1258,7 +1293,11 @@
             let gLo = 0, gHi = grainLen;
             if (oStart < 0) { gLo = -oStart; oStart = 0; }
             if (oEnd > outLen) { gHi -= (oEnd - outLen); oEnd = outLen; }
-            if (gHi > gLo) grains.push({ start, gLo, gHi, oStart, grainLen, gain: src.gain });
+            if (gHi > gLo) {
+              const grain = { start, gLo, gHi, oStart, grainLen, gain: src.gain };
+              if (formantSemi) { grain.fmt = fmtRatio; grain.center = srcCenter - start; }
+              grains.push(grain);
+            }
           }
         }
         outTime += Math.max(1 / sr, pOut);
@@ -1276,6 +1315,21 @@
   // at an octave down literally a 0 sample between grains) and restored the
   // original period, so the note buzzed at the old pitch.
   const NORM_FLOOR = 0.5;
+  // Formant shift range, semitones each way. Grain resampling keeps the
+  // vowel intelligible up to about this much; beyond it grains smear.
+  const MAX_FORMANT_ST = 5;
+
+  // Grain sample i, read with the source time axis scaled by g.fmt around the
+  // grain centre (linear interpolation). fmt > 1 reads faster, which moves the
+  // spectral envelope (formants) up; the pitch is set by grain spacing, not
+  // by this read, so the two stay independent.
+  function readGrainSample(signal, g, i) {
+    const pos = g.start + g.center + (i - g.center) * g.fmt;
+    const i0 = Math.floor(pos);
+    if (i0 < 0 || i0 + 1 >= signal.length) return 0;
+    const fr = pos - i0;
+    return signal[i0] * (1 - fr) + signal[i0 + 1] * fr;
+  }
 
   // Cache of Hann windows by length to avoid recomputation across channels.
   function makeWinCache() {
@@ -1296,7 +1350,7 @@
       for (let i = g.gLo; i < g.gHi; i++) {
         const oi = g.oStart + (i - g.gLo);
         const gain = g.gain == null ? 1 : g.gain;
-        out[oi] += signal[g.start + i] * win[i] * gain;
+        out[oi] += (g.fmt ? readGrainSample(signal, g, i) : signal[g.start + i]) * win[i] * gain;
         outNorm[oi] += win[i] * gain;
       }
     }
@@ -1311,6 +1365,16 @@
   // deliberately conservative because re-graining ratio=1 material can still
   // soften attacks and add a faint phasey texture even when pitch is unchanged.
   function buildResynthBlendMask(sr, n, pitchTrack, segments, opts) {
+    return featherBlendMask(buildResynthBlendMaskRaw(sr, n, pitchTrack, segments, opts), sr);
+  }
+
+  function featherBlendMask(mask, sr) {
+    return featherMask(mask, Math.max(8, Math.round(sr * 0.008)));
+  }
+
+  // The hard 0/1 mask, before feathering (split out so the iPhone chunked
+  // render can give the UI thread a turn between the two steps).
+  function buildResynthBlendMaskRaw(sr, n, pitchTrack, segments, opts) {
     opts = opts || {};
     const mask = new Float32Array(n);
     const { times, voiced, clarity, f0s } = pitchTrack;
@@ -1356,21 +1420,40 @@
       for (let i = lo; i < hi; i++) mask[i] = 1;
     }
 
-    // Feather transitions by ~8 ms. This keeps consonant/vowel boundaries and
-    // segment edges from clicking when switching between dry and PSOLA audio.
-    const fade = Math.max(8, Math.round(sr * 0.008));
-    const smoothed = new Float32Array(n);
-    let acc = 0;
-    const win = fade * 2 + 1;
-    for (let i = 0; i < n + fade; i++) {
-      const add = i < n ? mask[i] : 0;
-      const remIdx = i - win;
-      const rem = remIdx >= 0 ? mask[remIdx] : 0;
-      acc += add - rem;
-      const outIdx = i - fade;
-      if (outIdx >= 0 && outIdx < n) smoothed[outIdx] = Math.min(1, acc / Math.max(1, fade));
+    return mask;
+  }
+
+  // Feathering (featherBlendMask, ~8 ms) keeps consonant/vowel boundaries and
+  // segment edges from clicking when switching between dry and PSOLA audio.
+  // Box-filter a 0/1 mask: out[o] = min(1, sum(mask[o-fade..o+fade]) / fade),
+  // with zeros outside the array. Away from a 0<->1 change the whole window
+  // holds one value and the result equals the input, so only the ~2*fade
+  // samples around each change are summed. Identical output to the plain
+  // sliding sum, without touching every sample of a long song.
+  function featherMask(mask, fade) {
+    const n = mask.length;
+    const out = new Float32Array(n);
+    out.set(mask);
+    const norm = Math.max(1, fade);
+    const dirty = (b) => {
+      // outputs whose window contains both sides of the change at b
+      const d0 = Math.max(0, b - fade), d1 = Math.min(n - 1, b + fade - 1);
+      if (d1 < d0) return;
+      let acc = 0;
+      for (let i = Math.max(0, d0 - fade); i <= Math.min(n - 1, d0 + fade); i++) acc += mask[i];
+      for (let o = d0; o <= d1; o++) {
+        out[o] = Math.min(1, acc / norm);
+        const next = o + fade + 1, drop = o - fade;
+        acc += (next < n ? mask[next] : 0) - (drop >= 0 ? mask[drop] : 0);
+      }
+    };
+    if (n === 0) return out;
+    if (mask[0] !== 0) dirty(0);
+    for (let i = 1; i < n; i++) {
+      if (mask[i] !== mask[i - 1]) dirty(i);
     }
-    return smoothed;
+    if (mask[n - 1] !== 0) dirty(n);
+    return out;
   }
 
   // The feathered blend mask can reach a few milliseconds past the first or
@@ -1530,15 +1613,24 @@
     for (const seg of segments) { if (segmentHasPitchEdit(seg)) { hasAnyEdit = true; break; } }
     if (!hasAnyEdit) return channels.map((ch) => Float32Array.from(ch));
 
+    // Each setup stage is a single synchronous pass over the whole song. On a
+    // phone they add up to a visible freeze, so hand the UI thread a turn
+    // between stages (the block loop below already does the same).
+    const turn = () => new Promise(requestAnimationFrame);
     const guide = guideChannelIndex(channels, opts);
     const guideSignal = makePsolaGuide(channels, guide);
     const sharedOpts = Object.assign({}, opts, { guideSignal });
     sharedOpts.shiftPlan = buildShiftPlan(segments, pitchTrack, sharedOpts);
+    await turn();
     const schedule = buildGrainSchedule(sr, n, pitchTrack, segments, sharedOpts);
-    const blend = limitBlendToCoverage(buildResynthBlendMask(sr, n, pitchTrack, segments, sharedOpts), schedule.cells, sr);
+    await turn();
+    const rawMask = buildResynthBlendMaskRaw(sr, n, pitchTrack, segments, sharedOpts);
+    await turn();
+    const blend = limitBlendToCoverage(featherBlendMask(rawMask, sr), schedule.cells, sr);
     let anyWet = false;
     for (let i = 0; i < blend.length; i++) { if (blend[i] > 1e-5) { anyWet = true; break; } }
     if (!anyWet) return channels.map((ch) => Float32Array.from(ch));
+    await turn();
 
     const grains = schedule.grains;
     const winCache = makeWinCache();
@@ -1574,7 +1666,7 @@
             if (oi < blockStart) continue;
             if (oi >= blockEnd) break;
             const bi = oi - blockStart;
-            acc[bi] += srcSignal[g.start + i] * win[i] * gain;
+            acc[bi] += (g.fmt ? readGrainSample(srcSignal, g, i) : srcSignal[g.start + i]) * win[i] * gain;
             norm[bi] += win[i] * gain;
           }
         }
@@ -1695,7 +1787,7 @@
     yinPitchTrack,
     freqToMidi, midiToFreq, midiToNoteName, NOTE_NAMES,
     segmentNotes, splitSegment, suggestFromReference,
-    buildGrainSchedule, applyGrainSchedule, resynthesize, resynthesizeChunked, snapToScale, SCALES, makeWinCache,
+    featherMask, buildGrainSchedule, applyGrainSchedule, resynthesize, resynthesizeChunked, snapToScale, SCALES, makeWinCache, MAX_FORMANT_ST,
     resynthRegions, guideChannelIndex, PITCH_TRANSITION_SEC,
     encodeWav, encodeWavChunked,
   };
