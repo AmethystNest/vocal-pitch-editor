@@ -456,6 +456,11 @@
           <button data-d="-50">-50¢</button><button data-d="-10">-10¢</button><button data-d="-1">-1¢</button>
           <button data-d="1">+1¢</button><button data-d="10">+10¢</button><button data-d="50">+50¢</button>
         </div>
+        <div class="strengthPanel formantPanel">
+          <div class="strengthHead"><span>声色（フォルマント）</span><span class="strengthValue" id="formantValue">0</span></div>
+          <input class="strengthRange" id="formantRange" type="range" min="-5" max="5" step="0.5" value="0" aria-label="声色（フォルマント）の移動 半音。プラスで明るく細く、マイナスで太く">
+          <div class="strengthHint">音程は変えず、声の共鳴だけを動かします（±5半音まで）。</div>
+        </div>
         <button class="playSegBtn" id="inspMute" type="button" aria-pressed="false">🔇 このノートをミュート</button>
         <button class="resetBtn" id="inspReset">このノートをリセット</button>
       </div>

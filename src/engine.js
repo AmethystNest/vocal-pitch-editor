@@ -938,6 +938,7 @@
   // original waveform and also cuts a large amount of work on phones.
   function segmentHasPitchEdit(seg) {
     if (!seg) return false;
+    if (Math.abs(seg.formantSemitones || 0) >= 0.005) return true;
     if (Math.abs((seg.shiftSemitones || 0) + (seg.fineCents || 0) / 100) >= 0.005) return true;
     if (seg.lineOffsets) {
       for (let i = 0; i < seg.lineOffsets.length; i++) {
@@ -1137,19 +1138,23 @@
       while (lo <= hi) { const m = (lo + hi) >> 1; if (starts[m] <= t) { idx = m; lo = m + 1; } else hi = m - 1; }
       return idx;
     }
-    function inTrans(tr, t) {
+    function inTrans(tr, t, f) {
       if (!tr || t < tr.lo || t > tr.hi) return null;
       const w = 0.5 - 0.5 * Math.cos(Math.PI * (t - tr.lo) / (tr.hi - tr.lo));
-      return (1 - w) * base(tr.a, t) + w * base(tr.b, t);
+      return (1 - w) * f(tr.a, t) + w * f(tr.b, t);
     }
-    function shiftAt(t) {
+    function curveAt(t, f) {
       const j = indexAt(t);
-      let v = j >= 1 ? inTrans(trans[j - 1], t) : null;
-      if (v == null && j >= 0) v = inTrans(trans[j], t);
+      let v = j >= 1 ? inTrans(trans[j - 1], t, f) : null;
+      if (v == null && j >= 0) v = inTrans(trans[j], t, f);
       if (v != null) return v;
-      if (j >= 0 && t < ordered[j].endTime && edited[j]) return base(ordered[j], t);
+      if (j >= 0 && t < ordered[j].endTime && edited[j]) return f(ordered[j], t);
       return 0;
     }
+    const shiftAt = (t) => curveAt(t, base);
+    // Formant shift (semitones of spectral-envelope movement) follows the same
+    // note-to-note transition as pitch, so a vowel colour never jumps.
+    const formantAt = (t) => curveAt(t, (seg) => seg.formantSemitones || 0);
     const regions = [];
     for (let i = 0; i < ordered.length; i++) {
       if (!edited[i]) continue;
@@ -1174,7 +1179,7 @@
       for (const r of regions) if (t >= r.startTime && t < r.endTime) return r;
       return null;
     }
-    return { shiftAt, regions, regionAt };
+    return { shiftAt, formantAt, regions, regionAt };
   }
 
   // Time spans that resynthesis renders as one continuous grain schedule.
@@ -1229,6 +1234,10 @@
         if (!vHere) shiftSemi = 0;
         const ratio = Math.min(2.0, Math.max(0.5, Math.pow(2, shiftSemi / 12)));
         const pOut = pIn / ratio;
+        // Spectral-envelope (formant) ratio for this instant; 1 = untouched.
+        // Not applied where the shift is suppressed for an unvoiced frame.
+        const formantSemi = vHere ? Math.max(-MAX_FORMANT_ST, Math.min(MAX_FORMANT_ST, plan.formantAt(outTime))) : 0;
+        const fmtRatio = Math.pow(2, formantSemi / 12);
 
         // Inside a region every voiced cycle is resynthesised, even where the
         // shift curve passes through 0 (e.g. a -2 -> +2 transition): leaving
@@ -1284,7 +1293,11 @@
             let gLo = 0, gHi = grainLen;
             if (oStart < 0) { gLo = -oStart; oStart = 0; }
             if (oEnd > outLen) { gHi -= (oEnd - outLen); oEnd = outLen; }
-            if (gHi > gLo) grains.push({ start, gLo, gHi, oStart, grainLen, gain: src.gain });
+            if (gHi > gLo) {
+              const grain = { start, gLo, gHi, oStart, grainLen, gain: src.gain };
+              if (formantSemi) { grain.fmt = fmtRatio; grain.center = srcCenter - start; }
+              grains.push(grain);
+            }
           }
         }
         outTime += Math.max(1 / sr, pOut);
@@ -1302,6 +1315,21 @@
   // at an octave down literally a 0 sample between grains) and restored the
   // original period, so the note buzzed at the old pitch.
   const NORM_FLOOR = 0.5;
+  // Formant shift range, semitones each way. Grain resampling keeps the
+  // vowel intelligible up to about this much; beyond it grains smear.
+  const MAX_FORMANT_ST = 5;
+
+  // Grain sample i, read with the source time axis scaled by g.fmt around the
+  // grain centre (linear interpolation). fmt > 1 reads faster, which moves the
+  // spectral envelope (formants) up; the pitch is set by grain spacing, not
+  // by this read, so the two stay independent.
+  function readGrainSample(signal, g, i) {
+    const pos = g.start + g.center + (i - g.center) * g.fmt;
+    const i0 = Math.floor(pos);
+    if (i0 < 0 || i0 + 1 >= signal.length) return 0;
+    const fr = pos - i0;
+    return signal[i0] * (1 - fr) + signal[i0 + 1] * fr;
+  }
 
   // Cache of Hann windows by length to avoid recomputation across channels.
   function makeWinCache() {
@@ -1322,7 +1350,7 @@
       for (let i = g.gLo; i < g.gHi; i++) {
         const oi = g.oStart + (i - g.gLo);
         const gain = g.gain == null ? 1 : g.gain;
-        out[oi] += signal[g.start + i] * win[i] * gain;
+        out[oi] += (g.fmt ? readGrainSample(signal, g, i) : signal[g.start + i]) * win[i] * gain;
         outNorm[oi] += win[i] * gain;
       }
     }
@@ -1638,7 +1666,7 @@
             if (oi < blockStart) continue;
             if (oi >= blockEnd) break;
             const bi = oi - blockStart;
-            acc[bi] += srcSignal[g.start + i] * win[i] * gain;
+            acc[bi] += (g.fmt ? readGrainSample(srcSignal, g, i) : srcSignal[g.start + i]) * win[i] * gain;
             norm[bi] += win[i] * gain;
           }
         }
@@ -1759,7 +1787,7 @@
     yinPitchTrack,
     freqToMidi, midiToFreq, midiToNoteName, NOTE_NAMES,
     segmentNotes, splitSegment, suggestFromReference,
-    featherMask, buildGrainSchedule, applyGrainSchedule, resynthesize, resynthesizeChunked, snapToScale, SCALES, makeWinCache,
+    featherMask, buildGrainSchedule, applyGrainSchedule, resynthesize, resynthesizeChunked, snapToScale, SCALES, makeWinCache, MAX_FORMANT_ST,
     resynthRegions, guideChannelIndex, PITCH_TRANSITION_SEC,
     encodeWav, encodeWavChunked,
   };

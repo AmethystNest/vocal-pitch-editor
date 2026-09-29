@@ -324,6 +324,39 @@ async function main(){
       for(let i=0;i<n;i++) assert.equal(b[i],a[i],`featherMask differs at ${i} (n=${n}, fade=${fade})`);
     }
   }
+  // Formant shift moves the spectral envelope, not the pitch.
+  {
+    const f0=100,F1=900,x=glottalVowel(f0,F1,90,1.2);
+    const opt={frameSize:2048,hopSize:512,fmin:70,fmax:1000,threshold:0.15};
+    const tr=PE.yinPitchTrack(x,sr,opt), segs=PE.segmentNotes(tr);
+    const envPeak=(sig,pitch)=>{const a=Math.round(.35*sr),b=Math.round(.85*sr),H=[];
+      for(let k=1;k*pitch<2500;k++){const f=k*pitch;if(f<450)continue;let re=0,im=0;
+        for(let i=a;i<b;i++){const w=.5-.5*Math.cos(2*Math.PI*(i-a)/(b-a)),ph=2*Math.PI*f*i/sr;re+=sig[i]*w*Math.cos(ph);im-=sig[i]*w*Math.sin(ph);}
+        H.push([f,Math.hypot(re,im)]);}
+      let bi=0;for(let k=1;k<H.length;k++)if(H[k][1]>H[bi][1])bi=k;
+      const l=Math.log(H[bi-1][1]),m=Math.log(H[bi][1]),r=Math.log(H[bi+1][1]);
+      return H[bi][0]+0.5*(l-r)/(l-2*m+r)*pitch;};
+    const render=(fs,ps)=>{
+      const edits=segs.map(g=>({startFrame:g.startFrame,endFrame:g.endFrame,startTime:g.startTime,endTime:g.endTime,shiftSemitones:ps,fineCents:0,lineOffsets:null,formantSemitones:fs}));
+      const [y]=PE.resynthesize([x],sr,tr,edits);
+      const ot=PE.yinPitchTrack(y,sr,opt),v=[];
+      for(let i=0;i<ot.f0s.length;i++) if(ot.voiced[i]&&ot.times[i]>.3&&ot.times[i]<.9) v.push(ot.f0s[i]);
+      v.sort((p,q)=>p-q);const f=v[v.length>>1];
+      return {f0:f,peak:envPeak(y,f)};};
+    const base=envPeak(x,f0);
+    assert(Math.abs(base-F1)/F1<.05,`test vowel formant not where expected: ${base}`);
+    const up=render(3,0), down=render(-3,0), pitchOnly=render(0,2), both=render(3,2);
+    assert(Math.abs(1200*Math.log2(up.f0/f0))<15&&Math.abs(1200*Math.log2(down.f0/f0))<15,`formant shift changed the pitch: ${up.f0} / ${down.f0}`);
+    assert(up.peak/base>1.12&&up.peak/base<1.35,`+3 st formant moved the envelope by x${(up.peak/base).toFixed(3)} (expected about 1.19)`);
+    assert(down.peak/base<.92&&down.peak/base>.72,`-3 st formant moved the envelope by x${(down.peak/base).toFixed(3)} (expected about 0.84)`);
+    assert(Math.abs(pitchOnly.peak/base-1)<.06,`a pitch-only edit moved the formant by x${(pitchOnly.peak/base).toFixed(3)}`);
+    assert(Math.abs(1200*Math.log2(both.f0/(f0*Math.pow(2,2/12))))<15&&both.peak/base>1.1,'pitch and formant edits together are not independent');
+    // both render paths agree
+    const editsC=segs.map(g=>({startFrame:g.startFrame,endFrame:g.endFrame,startTime:g.startTime,endTime:g.endTime,shiftSemitones:0,fineCents:0,lineOffsets:null,formantSemitones:3}));
+    const [a]=PE.resynthesize([x],sr,tr,editsC),[b]=await PE.resynthesizeChunked([x],sr,tr,editsC,{blockFrames:8192});
+    let dmax=0;for(let i=0;i<a.length;i++)dmax=Math.max(dmax,Math.abs(a[i]-b[i]));
+    assert(dmax<1e-4,`standard and chunked formant renders differ by ${dmax}`);
+  }
   // Key/scale snapping and per-note mute.
   assert.equal(PE.snapToScale(61.4,0,'chromatic'),61);
   assert.equal(PE.snapToScale(61.4,0,'major'),62,'C# is not in C major: 61.4 goes to D');

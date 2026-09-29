@@ -1741,7 +1741,7 @@
   let pinchActive = false;
 
   function resetSegment(seg) {
-    seg.shiftSemitones = 0; seg.fineCents = 0; seg.lineOffsets = null; seg.autoCurve = false; seg.muted = false;
+    seg.shiftSemitones = 0; seg.fineCents = 0; seg.lineOffsets = null; seg.autoCurve = false; seg.muted = false; seg.formantSemitones = 0;
   }
 
   // Paint free-hand pitch offsets (Line tool) into seg.lineOffsets for every
@@ -2512,6 +2512,9 @@
     const seg = S.segments.find(s => s.id === S.selectedSegId);
     if (!seg) { inspector.style.display = 'none'; updateAccessibleNoteNav(); return; }
     inspector.style.display = 'block';
+    const formantRange = $('formantRange');
+    formantRange.value = String(seg.formantSemitones || 0);
+    $('formantValue').textContent = formantLabel(seg.formantSemitones || 0);
     const muteBtn = $('inspMute');
     muteBtn.setAttribute('aria-pressed', seg.muted ? 'true' : 'false');
     muteBtn.textContent = seg.muted ? '🔈 ミュートを解除' : '🔇 このノートをミュート';
@@ -2673,6 +2676,38 @@
   scaleRootSel.addEventListener('change', onScaleChange);
   scaleTypeSel.addEventListener('change', onScaleChange);
 
+  function formantLabel(v) { return v === 0 ? '0' : `${v > 0 ? '+' : ''}${v}`; }
+  {
+    // One undo entry per slider drag: the snapshot is taken at the first
+    // input event and committed when the drag ends.
+    const range = $('formantRange');
+    let pendingSnapshot = null, lastPushed = null, lastPushedAt = 0;
+    range.addEventListener('input', () => {
+      if (S.selectedSegId == null) return;
+      const seg = S.segments.find(s => s.id === S.selectedSegId);
+      if (!seg) return;
+      if (!pendingSnapshot) pendingSnapshot = rememberBeforeEdit();
+      seg.formantSemitones = Math.max(-PE.MAX_FORMANT_ST, Math.min(PE.MAX_FORMANT_ST, parseFloat(range.value) || 0));
+      $('formantValue').textContent = formantLabel(seg.formantSemitones);
+      S.previewSegId = seg.id;
+      scheduleResynth(seg.id);
+    });
+    range.addEventListener('change', () => {
+      if (pendingSnapshot) {
+        const before = pendingSnapshot.segments.find(s => s.id === S.selectedSegId);
+        const seg = S.segments.find(s => s.id === S.selectedSegId);
+        const changed = !before || !seg || (before.formantSemitones || 0) !== (seg.formantSemitones || 0);
+        // Keyboard steps arrive as a burst of change events; keep them as one
+        // undo entry as long as nothing else was pushed in between.
+        const continuing = lastPushed && S.undoStack[S.undoStack.length - 1] === lastPushed && Date.now() - lastPushedAt < 1000;
+        if (changed && !continuing) { pushUndoSnapshot(pendingSnapshot); lastPushed = pendingSnapshot; }
+        if (changed) lastPushedAt = Date.now();
+        pendingSnapshot = null;
+      }
+      render();
+    });
+  }
+
   $('inspMute').addEventListener('click', () => {
     if (S.selectedSegId == null) return;
     const seg = S.segments.find(s => s.id === S.selectedSegId);
@@ -2795,7 +2830,7 @@
       startFrame: s.startFrame, endFrame: s.endFrame, startTime: s.startTime, endTime: s.endTime,
       shiftSemitones: s.shiftSemitones, fineCents: s.fineCents,
       lineOffsets: s.lineOffsets ? Float64Array.from(s.lineOffsets) : null,
-      autoCurve: !!s.autoCurve, muted: !!s.muted,
+      autoCurve: !!s.autoCurve, muted: !!s.muted, formantSemitones: s.formantSemitones || 0,
     };
   }
 
