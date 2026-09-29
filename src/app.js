@@ -19,7 +19,7 @@
       const cb = pending.get(msg.id);
       if (!cb) return;
       if (msg.type === 'progress') {
-        if (cb.onProgress) { try { cb.onProgress(msg.fraction); } catch (err) {} }
+        if (cb.onProgress) { try { cb.onProgress(msg.fraction, msg.stage); } catch (err) {} }
         return;
       }
       pending.delete(msg.id);
@@ -254,6 +254,27 @@
     loadingProgress.setAttribute('aria-valuenow', String(pct));
     loadingProgressFill.style.width = pct + '%';
   }
+  // Non-blocking progress strip for the お手本 (reference) import. fraction
+  // null = a stage with no measurable progress; text null hides the strip.
+  const refProgress = $('refProgress'), refProgressFill = $('refProgressFill'), refProgressLabel = $('refProgressLabel');
+  function setRefProgress(text, fraction) {
+    if (!refProgress) return;
+    if (text == null) { refProgress.hidden = true; return; }
+    refProgress.hidden = false;
+    refProgressLabel.textContent = text;
+    if (fraction == null) {
+      refProgress.classList.add('indeterminate');
+      refProgress.removeAttribute('aria-valuenow');
+      refProgressFill.style.width = '';
+      return;
+    }
+    const pct = Math.max(0, Math.min(100, Math.round(fraction * 100)));
+    refProgress.classList.remove('indeterminate');
+    refProgress.setAttribute('aria-valuenow', String(pct));
+    refProgressFill.style.width = pct + '%';
+    refProgressLabel.textContent = `${text} ${pct}%`;
+  }
+
 
   function ensureAudioContext() {
     if (!S.audioCtx) {
@@ -619,15 +640,50 @@
       navigator.serviceWorker.register('./sw.js').then((registration) => {
         // An installed iPhone PWA is often resumed rather than relaunched,
         // which skips the browser's navigation-time update check.
+        swRegistration = registration;
         let lastCheck = Date.now();
         document.addEventListener('visibilitychange', () => {
           if (document.hidden || Date.now() - lastCheck < 10 * 60 * 1000) return;
           lastCheck = Date.now();
           registration.update().catch(() => {});
+          checkForUpdate(false);
         });
+        setTimeout(() => checkForUpdate(false), 4000);
       }).catch((err) => console.warn('SW registration failed', err));
     }, { once: true });
   }
+
+  // Version shown/compared as the cache name in sw.js (bumped every release).
+  // The page remembers the version it started with; comparing it to the
+  // current sw.js catches an update even if the controllerchange event was
+  // missed (e.g. the new worker took over before this page registered).
+  let swRegistration = null, loadedVersion = null;
+  const VERSION_PREFIX = 'vocal-pitch-editor-';
+  const versionLabel = $('appVersion'), updateCheckBtn = $('updateCheckBtn');
+  if (window.caches && 'serviceWorker' in navigator && location.protocol === 'https:') {
+    caches.keys().then((keys) => {
+      const name = keys.filter((k) => k.startsWith(VERSION_PREFIX)).sort().pop();
+      if (name) {
+        loadedVersion = name.slice(VERSION_PREFIX.length);
+        if (versionLabel) versionLabel.textContent = `バージョン ${loadedVersion.split('-')[0]}`;
+      }
+    }).catch(() => {});
+    if (updateCheckBtn) updateCheckBtn.hidden = false;
+  }
+
+  async function checkForUpdate(manual) {
+    try {
+      const res = await fetch('./sw.js', { cache: 'no-store' });
+      const m = res.ok ? /CACHE\s*=\s*['"]vocal-pitch-editor-([^'"]+)['"]/.exec(await res.text()) : null;
+      if (!m) throw new Error('no version');
+      if (swRegistration) swRegistration.update().catch(() => {});
+      if (loadedVersion && m[1] !== loadedVersion) showUpdateNotice();
+      else if (manual) toastMsg(`最新のバージョンです（${(loadedVersion || m[1]).split('-')[0]}）`, 2600);
+    } catch (e) {
+      if (manual) toastMsg('更新を確認できませんでした。通信状態をご確認ください', 3000, true);
+    }
+  }
+  if (updateCheckBtn) updateCheckBtn.addEventListener('click', () => checkForUpdate(true));
 
   function showUpdateNotice() {
     const banner = $('updateBanner');
@@ -652,6 +708,7 @@
 
   function releaseAudioMemory() {
     S.audioSessionId++;
+    setRefProgress(null);
     S.analysisDownsampled = false;
     S.analysisSampleRate = null;
     S.fileBaseName = 'audio';
@@ -945,6 +1002,7 @@
     const audioSessionId = S.audioSessionId;
     const referenceRequestId = S.referenceRequestId = (S.referenceRequestId || 0) + 1;
     toastMsg('リファレンスを解析中...', 5000);
+    setRefProgress('お手本を読み込み中', null);
     $('refBtn').disabled = true;
     try {
       if (IS_IOS) {
@@ -967,6 +1025,7 @@
           toastMsg('大きい音源です。解析中はほかのアプリを閉じると安定します。', 4000);
         }
       }
+      setRefProgress('お手本を解析準備中', null);
       let refMono;
       // Reuse the iPhone analysis path used by the main vocal: a full-rate
       // Float64 reference can add tens of MB while the vocal's original and
@@ -979,9 +1038,15 @@
       // precursor before sending analysis to the Worker on memory-tight iOS.
       if (refAnalysis.signal !== refMonoFull) refMonoFull = null;
       const vocalSegsPlain = S.segments.map((s) => ({ startTime: s.startTime, endTime: s.endTime, startFrame: s.startFrame, endFrame: s.endFrame, noteMidi: s.noteMidi }));
+      setRefProgress('お手本の音程を解析中', 0);
       const res = await workerCall(
         { type: 'reference', refSignal: refMono, refSr: refAnalysis.sr, opts: yinOptsForSampleRate(refAnalysis.sr), vocalPitchTrack: S.pitchTrack, vocalSegments: vocalSegsPlain },
-        [refMono.buffer]
+        [refMono.buffer],
+        (fraction, stage) => {
+          if (audioSessionId !== S.audioSessionId || referenceRequestId !== S.referenceRequestId) return;
+          if (stage === 'align') setRefProgress('ボーカルと位置合わせ中', null);
+          else setRefProgress('お手本の音程を解析中', fraction);
+        }
       );
       if (audioSessionId !== S.audioSessionId || referenceRequestId !== S.referenceRequestId) return;
       res.suggestions.forEach((sugg, i) => { if (S.segments[i]) { S.segments[i].refSuggestMidi = sugg; S.segments[i].refExpression = res.expressions && res.expressions[i] ? Float64Array.from(res.expressions[i]) : null; } });
@@ -1008,7 +1073,10 @@
     } finally {
       // Do not let an obsolete reference request re-enable controls owned by
       // a newer main-audio session.
-      if (audioSessionId === S.audioSessionId && referenceRequestId === S.referenceRequestId) $('refBtn').disabled = false;
+      if (audioSessionId === S.audioSessionId && referenceRequestId === S.referenceRequestId) {
+        $('refBtn').disabled = false;
+        setRefProgress(null);
+      }
     }
   }
 

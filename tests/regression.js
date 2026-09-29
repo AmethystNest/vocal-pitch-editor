@@ -348,6 +348,21 @@ async function main(){
       assert.equal(outside,0,`${fn}: mute changed audio outside the note`);
     }
   }
+  // Reference import progress: opt-in, monotonic pitch stage, then an align stage before the result.
+  {
+    const vocalTrack=PE.yinPitchTrack(sine(220,1.2),sr), vocalSegs=PE.segmentNotes(vocalTrack).map(g=>({startTime:g.startTime,endTime:g.endTime,startFrame:g.startFrame,endFrame:g.endFrame,noteMidi:g.noteMidi}));
+    const refMsg={type:'reference',refSignal:sine(246.94,1.2),refSr:sr,vocalPitchTrack:vocalTrack,vocalSegments:vocalSegs};
+    context.onmessage({data:Object.assign({id:20},refMsg)});
+    const plain=messages.filter(m=>m.id===20);
+    assert(plain.length===1&&plain[0].type==='referenced','reference sent progress without opting in');
+    context.onmessage({data:Object.assign({id:21,reportProgress:true},refMsg,{refSignal:sine(246.94,1.2)})});
+    const rp=messages.filter(m=>m.id===21);
+    const pitch=rp.filter(m=>m.type==='progress'&&m.stage==='pitch'), align=rp.filter(m=>m.type==='progress'&&m.stage==='align');
+    assert(pitch.length>=5&&pitch.every((m,i)=>m.fraction>=0&&m.fraction<1&&(i===0||m.fraction>pitch[i-1].fraction)),'reference pitch progress missing or not monotonic');
+    assert.equal(align.length,1,'reference align stage missing');
+    assert.equal(rp[rp.length-1].type,'referenced');
+    assert(rp.indexOf(align[0])>rp.indexOf(pitch[pitch.length-1]),'align stage came before pitch progress finished');
+  }
   console.log(`regression PASS: edit→F0 ${outputPitch.toFixed(2)} Hz; vibrato spread ${spreadIn.toFixed(3)}→${spreadOut.toFixed(3)} st; unvoiced max Δ ${noiseDelta}; boundary step ${sourceStep.toFixed(4)}→${outputStep.toFixed(4)}; stereo drift ${stereoError}; reference alignment; standard/chunked max Δ ${difference}; stereo WAV header; worker analyze`);
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

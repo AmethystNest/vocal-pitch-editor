@@ -15,7 +15,11 @@ self.onmessage = function (e) {
       const channels = PitchEngine.resynthesize(msg.channels, msg.sr, msg.pitchTrack, msg.segments, { guideChannel: msg.guideChannel });
       self.postMessage({ type: 'resynthed', id: msg.id, channels }, channels.map(c => c.buffer));
     } else if (msg.type === 'reference') {
-      const refPitchTrack = PitchEngine.yinPitchTrack(msg.refSignal, msg.refSr, msg.opts || undefined);
+      // Opt-in progress, like 'analyze': older pages never see these messages.
+      const refOpts = Object.assign({}, msg.opts || {});
+      if (msg.reportProgress) refOpts.onProgress = (fraction) => self.postMessage({ type: 'progress', id: msg.id, fraction, stage: 'pitch' });
+      const refPitchTrack = PitchEngine.yinPitchTrack(msg.refSignal, msg.refSr, refOpts);
+      if (msg.reportProgress) self.postMessage({ type: 'progress', id: msg.id, fraction: 1, stage: 'align' });
       const { suggestions, expressions, alignXs, alignYs, alignRefXs, alignRefYs } = PitchEngine.suggestFromReference(msg.vocalPitchTrack, msg.vocalSegments, refPitchTrack);
       self.postMessage(
         { type: 'referenced', id: msg.id, suggestions, expressions, alignXs, alignYs, alignRefXs, alignRefYs, refPitchTrack },
