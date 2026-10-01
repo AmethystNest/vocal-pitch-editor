@@ -534,7 +534,12 @@
       // cost stops long silent sections from creating arbitrary shortcuts.
       return 0.05;
     }
-    if (va !== vb) return 7.0;
+    // Voiced-vs-silent mismatch. Two singers rarely breathe or articulate
+    // consonants at the same notes, so a heavy penalty here made the path
+    // bend by 0.1-0.2 s to line up gaps instead of following the melody
+    // (fast phrases drifted into the neighbouring note). Kept clearly above
+    // the silent-silent cost so real rests still anchor the alignment.
+    if (va !== vb) return 2.0;
     const pitchCost = Math.min(10, Math.abs(A.pitch[i] - B.pitch[j]));
     const slopeCost = Math.min(3.0, Math.abs(A.slope[i] - B.slope[j]) * 1.35);
     let edgeCost = 0;

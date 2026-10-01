@@ -376,6 +376,26 @@ async function main(){
     const step=mk(24); for(let i=9;i<=10;i++) step.f[i]=270*Math.pow(2,5/12); PE.stabilizeOctaveErrors(step.f,step.v,step.c);
     assert(Math.abs(step.f[9]-270*Math.pow(2,5/12))<1,'a real short step was treated as an octave error');
   }
+  // Reference alignment must follow the melody, not line up where each singer happened to
+  // breathe: a stepwise phrase of short notes where one note is almost entirely silent
+  // (a breath/dropout), on a different note in the vocal and in the reference.
+  {
+    const hop=512/sr,notes=[60,62,60,62,64,62,60,62,60,64,62,60,62,60,64,62,60,62,64,62],per=Math.round(0.14/hop),gapFrames=11;
+    const mkTrack=(gapNote)=>{const n=notes.length*per,times=new Float64Array(n),f0s=new Float64Array(n),voiced=new Uint8Array(n),clarity=new Float64Array(n).fill(0.97);
+      for(let i=0;i<n;i++){const k=Math.floor(i/per),within=i-k*per;times[i]=(1024+i*512)/sr;
+        const gap=(k===gapNote&&within<gapFrames);voiced[i]=gap?0:1;
+        const vib=0.4*Math.sin(2*Math.PI*5.5*times[i]+(gapNote===4?0.7:2.1)),detune=(gapNote===4?0.3:-0.1)*Math.sin(k*1.7);
+        const glide=within<3&&k>0?(notes[k-1]-notes[k])*(1-within/3)*0.6:0;
+        f0s[i]=gap?0:440*Math.pow(2,(notes[k]+vib+detune+glide-69)/12);}
+      return {times,f0s,voiced,clarity,hopSize:512,frameSize:2048};};
+    const vocal=mkTrack(4),ref=mkTrack(7);
+    const segs=PE.segmentNotes(vocal).map(g=>({startTime:g.startTime,endTime:g.endTime,startFrame:g.startFrame,endFrame:g.endFrame,noteMidi:g.noteMidi}));
+    const out=PE.suggestFromReference(vocal,segs,ref);
+    const at=(t)=>{const xs=out.alignXs,ys=out.alignYs;let lo=0,hi=xs.length-1;if(t<=xs[0])return ys[0];while(hi-lo>1){const m=(lo+hi)>>1;if(xs[m]<=t)lo=m;else hi=m;}return ys[lo]+(t-xs[lo])/(xs[hi]-xs[lo])*(ys[hi]-ys[lo]);};
+    let worst=0;
+    for(let k=0;k<notes.length;k++){const t=vocal.times[k*per+Math.floor(per/2)];worst=Math.max(worst,Math.abs(at(t)-t));}
+    assert(worst<0.04,`reference alignment bent ${(worst*1000).toFixed(0)} ms to match a silent gap instead of the melody`);
+  }
   // Key/scale snapping and per-note mute.
   assert.equal(PE.snapToScale(61.4,0,'chromatic'),61);
   assert.equal(PE.snapToScale(61.4,0,'major'),62,'C# is not in C major: 61.4 goes to D');
