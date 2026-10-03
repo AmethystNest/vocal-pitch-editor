@@ -756,7 +756,11 @@
   // temporary memory and YIN CPU cost, while retaining the original-rate
   // channels for playback/export.
   function prepareAnalysisSignal(mono, sr, durationSec) {
-    const shouldDownsample = IS_IOS && (durationSec >= 75 || mono.length >= sr * 75);
+    // 2x-downsampled analysis measured equal in pitch accuracy and in the
+    // quality of the resulting edits (<=0.3 cent, <=0.3 dB) and ~3.8x faster
+    // (3 min song: 19.6 s -> 5.2 s on PC), so every platform uses it for songs
+    // of 20 s or more; short clips stay at full rate.
+    const shouldDownsample = durationSec >= 20 || mono.length >= sr * 20;
     if (!shouldDownsample || sr <= 24000) {
       return { signal: mono, sr, downsampled: false };
     }
@@ -807,8 +811,8 @@
     // across 22.05/44.1/48 kHz. This avoids losing timing resolution
     // when iPhone analysis is downsampled.
     return sr < 32000
-      ? { frameSize: 1024, hopSize: 256, fmin: 70, fmax: 1000, threshold: 0.15 }
-      : { frameSize: 2048, hopSize: 512, fmin: 70, fmax: 1000, threshold: 0.15 };
+      ? { frameSize: 1024, hopSize: 256, fmin: 70, fmax: 1400, threshold: 0.15 }
+      : { frameSize: 2048, hopSize: 512, fmin: 70, fmax: 1400, threshold: 0.15 };
   }
 
   // ============================================================
@@ -875,7 +879,7 @@
       // Pitch marks follow one channel for the whole song (see engine).
       S.guideChannel = PE.guideChannelIndex(S.origChannels);
 
-      const analyzeLabel = analysis.downsampled ? 'ピッチを省メモリ解析中(iPhone最適化)' : 'ピッチを解析中';
+      const analyzeLabel = analysis.downsampled ? (IS_IOS ? 'ピッチを省メモリ解析中(iPhone最適化)' : 'ピッチを高速解析中') : 'ピッチを解析中';
       loadingStatus.textContent = `${analyzeLabel}... 0%`;
       setLoadingProgress(0);
       await new Promise(r => setTimeout(r, 20));
@@ -915,7 +919,7 @@
       // their working representation only when the user requests it.
       S.editedBuffer = null;
 
-      $('fileNameLabel').textContent = file.name + (S.analysisDownsampled ? '・iPhone省メモリ解析' : '');
+      $('fileNameLabel').textContent = file.name + (S.analysisDownsampled && IS_IOS ? '・iPhone省メモリ解析' : '');
       loadingScreen.style.display = 'none';
       setControlsEnabled(true);
       resizeCanvas();

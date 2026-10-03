@@ -396,6 +396,17 @@ async function main(){
     for(let k=0;k<notes.length;k++){const t=vocal.times[k*per+Math.floor(per/2)];worst=Math.max(worst,Math.abs(at(t)-t));}
     assert(worst<0.04,`reference alignment bent ${(worst*1000).toFixed(0)} ms to match a silent gap instead of the melody`);
   }
+  // High notes (C6 and above) need an analysis ceiling above 1000 Hz; the app must use it on both paths.
+  {
+    const appSrc=fs.readFileSync(require.resolve('../src/app.js'),'utf8');
+    const m=appSrc.match(/function yinOptsForSampleRate[\s\S]*?\n  }\n/);
+    assert(m&&(m[0].match(/fmax: 1400/g)||[]).length===2,'yinOptsForSampleRate must use fmax 1400 for both sample-rate paths');
+    for(const hz of [1046.5,1174.7,1318.5]){
+      const tr=PE.yinPitchTrack(sine(hz,.5),sr,{frameSize:2048,hopSize:512,fmin:70,fmax:1400,threshold:0.15});
+      const v=[];for(let i=0;i<tr.f0s.length;i++) if(tr.voiced[i]) v.push(tr.f0s[i]);
+      v.sort((a,b)=>a-b);assert(v.length>5&&Math.abs(1200*Math.log2(v[v.length>>1]/hz))<20,`high note ${hz} Hz detected as ${v[v.length>>1]}`);
+    }
+  }
   // Key/scale snapping and per-note mute.
   assert.equal(PE.snapToScale(61.4,0,'chromatic'),61);
   assert.equal(PE.snapToScale(61.4,0,'major'),62,'C# is not in C major: 61.4 goes to D');
