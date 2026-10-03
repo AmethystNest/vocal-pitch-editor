@@ -407,6 +407,31 @@ async function main(){
       v.sort((a,b)=>a-b);assert(v.length>5&&Math.abs(1200*Math.log2(v[v.length>>1]/hz))<20,`high note ${hz} Hz detected as ${v[v.length>>1]}`);
     }
   }
+  // pYIN-style tracking: robust to the second-harmonic trap, keeps real octave leaps, silent on noise,
+  // and is what the app uses on both sample-rate paths.
+  {
+    const appSrc=fs.readFileSync(require.resolve('../src/app.js'),'utf8');
+    const m=appSrc.match(/function yinOptsForSampleRate[\s\S]*?\n  }\n/);
+    assert(m&&(m[0].match(/method: 'pyin'/g)||[]).length===2,'yinOptsForSampleRate must select the pyin tracker on both paths');
+    const po={frameSize:2048,hopSize:512,fmin:70,fmax:1400,threshold:0.15,method:'pyin'};
+    const median=(tr,a,b)=>{const v=[];for(let i=0;i<tr.f0s.length;i++) if(tr.voiced[i]&&tr.times[i]>=a&&tr.times[i]<b) v.push(tr.f0s[i]);v.sort((p,q)=>p-q);return v.length?v[v.length>>1]:NaN;};
+    for(const f0 of [110,150,200,261.63,330,392]){
+      const tr=PE.yinPitchTrack(glottalVowel(f0,2*f0,90,0.9),sr,po);
+      assert(Math.abs(1200*Math.log2(median(tr,.2,.7)/f0))<50,`pyin second-formant trap at ${f0} Hz: ${median(tr,.2,.7)}`);
+    }
+    // octave leap 220 -> 440 -> 220 Hz must be followed, not smoothed away
+    const seg=0.5,x=new Float32Array(Math.round(sr*seg*3));
+    for(let i=0;i<x.length;i++){const f=i<sr*seg?220:(i<sr*seg*2?440:220);x[i]=.3*Math.sin(2*Math.PI*f*i/sr);}
+    const leap=PE.yinPitchTrack(x,sr,po);
+    assert(Math.abs(1200*Math.log2(median(leap,.15,.4)/220))<30&&Math.abs(1200*Math.log2(median(leap,.65,.9)/440))<30&&Math.abs(1200*Math.log2(median(leap,1.15,1.4)/220))<30,'pyin smoothed away a real octave leap');
+    // noise only and silence stay unvoiced
+    const noise=new Float32Array(sr);let seed=1;for(let i=0;i<noise.length;i++){seed=(1664525*seed+1013904223)>>>0;noise[i]=.3*(seed/4294967296-.5);}
+    const nv=PE.yinPitchTrack(noise,sr,po).voiced.reduce((a,b)=>a+b,0);
+    assert.equal(nv,0,`white noise produced ${nv} voiced frames`);
+    assert.equal(PE.yinPitchTrack(new Float32Array(sr),sr,po).voiced.reduce((a,b)=>a+b,0),0,'silence produced voiced frames');
+    // short and empty inputs keep the arrays consistent
+    for(const n of [0,10,2047,2048,2049,4000]){const t=PE.yinPitchTrack(sine(220,n/sr||0),sr,po);assert(t.f0s.length===t.voiced.length&&t.f0s.length===t.times.length,`pyin array length mismatch at n=${n}`);}
+  }
   // Key/scale snapping and per-note mute.
   assert.equal(PE.snapToScale(61.4,0,'chromatic'),61);
   assert.equal(PE.snapToScale(61.4,0,'major'),62,'C# is not in C major: 61.4 goes to D');
