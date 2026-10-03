@@ -811,8 +811,8 @@
     // across 22.05/44.1/48 kHz. This avoids losing timing resolution
     // when iPhone analysis is downsampled.
     return sr < 32000
-      ? { frameSize: 1024, hopSize: 256, fmin: 70, fmax: 1400, threshold: 0.15 }
-      : { frameSize: 2048, hopSize: 512, fmin: 70, fmax: 1400, threshold: 0.15 };
+      ? { frameSize: 1024, hopSize: 256, fmin: 70, fmax: 1400, threshold: 0.15, method: 'pyin' }
+      : { frameSize: 2048, hopSize: 512, fmin: 70, fmax: 1400, threshold: 0.15, method: 'pyin' };
   }
 
   // ============================================================

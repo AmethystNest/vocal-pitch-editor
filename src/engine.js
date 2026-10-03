@@ -151,6 +151,163 @@
     }
   }
 
+  // ------------------------------------------------------------------
+  // pYIN-style tracking (opts.method === 'pyin').
+  //
+  // Plain YIN commits per frame to the first cmndf dip under a fixed
+  // threshold, so one weak or doubled frame becomes an octave error or a
+  // voicing drop that later heuristics have to patch. Here every frame keeps
+  // a few candidate periods with probabilities, and a Viterbi pass over the
+  // whole track picks the most plausible pitch/voicing path (pitch moves
+  // smoothly; switching voicing or leaping by more than a few semitones in
+  // one frame is expensive).
+  //
+  // Candidate probabilities: YIN's threshold is treated as a random variable
+  // ~ Beta(2, b). A dip is chosen by every threshold above its own value and
+  // below the smallest earlier dip, so its probability is F(prev min) -
+  // F(own value) with F the Beta(2, b) CDF = 1 - (1 - x)^b (1 + b x); the
+  // remainder F(smallest dip) is "unvoiced". No threshold loop is needed.
+  // ------------------------------------------------------------------
+  const PYIN_CANDIDATES = 6;
+  const PYIN_BINS_PER_SEMITONE = 3;
+
+  function betaCdf2(x, b) {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    return 1 - Math.pow(1 - x, b) * (1 + b * x);
+  }
+
+  // Fill candidate slots for frame i from its cmndf. Slots keep the most
+  // probable dips; the rest of the mass is the frame's unvoiced probability.
+  // `tauDepth` shifts probability from shallow dips to the deepest one (a
+  // doubled-frequency dip that is only slightly deeper than the real period
+  // would otherwise win the mass of every threshold above its value), keeping
+  // the voiced total unchanged.
+  const pyinDips = { lag: new Int32Array(256), val: new Float64Array(256), prob: new Float64Array(256), ref: new Float64Array(256) };
+  function pyinCollectFrame(cmndf, minLag, maxLag, sr, fmin, fmax, beta, tauDepth, store, i) {
+    const K = PYIN_CANDIDATES;
+    const dips = pyinDips;
+    let nd = 0, prevMin = 1;
+    for (let t = Math.max(1, minLag); t < maxLag - 1 && nd < 256; t++) {
+      const v = cmndf[t];
+      if (!(v < cmndf[t - 1] && v <= cmndf[t + 1]) || v >= 1 || v >= prevMin) continue;
+      const prob = betaCdf2(prevMin, beta) - betaCdf2(v, beta);
+      prevMin = v;
+      if (prob <= 1e-4) continue;
+      let tauRefined = t;
+      const s0 = cmndf[t - 1], s1 = v, s2 = cmndf[t + 1];
+      const denom = s0 - 2 * s1 + s2;
+      if (denom !== 0) tauRefined = t + 0.5 * (s0 - s2) / denom;
+      if (!(tauRefined > 0)) continue;
+      const f0 = sr / tauRefined;
+      if (f0 < fmin || f0 > fmax) continue;
+      dips.lag[nd] = t; dips.val[nd] = v; dips.prob[nd] = prob; dips.ref[nd] = f0; nd++;
+    }
+    const base = i * K;
+    store.unvoiced[i] = betaCdf2(prevMin, beta); // thresholds below the deepest dip find nothing
+    if (!nd) { for (let k = 0; k < K; k++) store.prob[base + k] = 0; return; }
+    if (tauDepth > 0) {
+      let total = 0, weighted = 0;
+      for (let j = 0; j < nd; j++) {
+        total += dips.prob[j];
+        dips.prob[j] *= Math.exp(-(dips.val[j] - prevMin) / tauDepth);
+        weighted += dips.prob[j];
+      }
+      const scale = weighted > 0 ? total / weighted : 1;
+      for (let j = 0; j < nd; j++) dips.prob[j] *= scale;
+    }
+    // keep the K most probable
+    let used = 0;
+    for (let j = 0; j < nd; j++) {
+      let slot = -1;
+      if (used < K) slot = used++;
+      else {
+        let worst = 0;
+        for (let k = 1; k < K; k++) if (store.prob[base + k] < store.prob[base + worst]) worst = k;
+        if (store.prob[base + worst] < dips.prob[j]) slot = worst;
+      }
+      if (slot >= 0) {
+        store.f0[base + slot] = dips.ref[j];
+        store.prob[base + slot] = dips.prob[j];
+        store.clar[base + slot] = 1 - dips.val[j];
+      }
+    }
+    for (let k = used; k < K; k++) store.prob[base + k] = 0;
+  }
+
+  // Viterbi over voiced pitch bins + one unvoiced state. Returns Int16Array
+  // (bin index per frame, -1 = unvoiced).
+  function pyinViterbi(store, nFrames, sr, hopSize, fmin, fmax, opts) {
+    const K = PYIN_CANDIDATES;
+    const nb = Math.max(2, Math.ceil(12 * PYIN_BINS_PER_SEMITONE * Math.log2(fmax / fmin)) + 1);
+    const binOf = (f0) => Math.round(12 * PYIN_BINS_PER_SEMITONE * Math.log2(f0 / fmin));
+    const dt = hopSize / sr;
+    const sigma = Math.max(1, (opts.pyinSigma || 2.0) * Math.sqrt(dt / 0.0116));
+    const J = Math.max(3, Math.round((opts.pyinMaxJump || 3.2) * PYIN_BINS_PER_SEMITONE * Math.sqrt(dt / 0.0116)));
+    const pSwitch = opts.pyinSwitch || 0.02;
+    const logStay = Math.log(1 - pSwitch), logSwitch = Math.log(pSwitch);
+    const logFromU = Math.log(pSwitch / nb);
+    const kernel = new Float64Array(2 * J + 1);
+    let ksum = 0;
+    for (let d = -J; d <= J; d++) { kernel[d + J] = Math.exp(-0.5 * d * d / (sigma * sigma)); ksum += kernel[d + J]; }
+    const logK = new Float64Array(2 * J + 1);
+    for (let d = 0; d < kernel.length; d++) logK[d] = Math.log(kernel[d] / ksum) + logStay;
+    const EPS = opts.pyinFloor || 1e-3;
+    // < 1 favours 'voiced' when the evidence is mixed (noisy or breathy frames)
+    const uScale = opts.pyinUnvoiced != null ? opts.pyinUnvoiced : 0.1;
+    const NEG = -1e30;
+
+    let delta = new Float64Array(nb + 1), next = new Float64Array(nb + 1);
+    const back = new Int8Array(nFrames * nb);        // voiced bins: offset d in [-J,J], 127 = from U
+    const backU = new Int16Array(nFrames);           // U state: previous voiced bin or -1 (from U)
+    const obs = new Float64Array(nb);
+    delta.fill(Math.log(1 / (nb + 1)));
+    for (let t = 0; t < nFrames; t++) {
+      // observation (log) for this frame
+      obs.fill(EPS);
+      const base = t * K;
+      for (let k = 0; k < K; k++) {
+        const pr = store.prob[base + k];
+        if (pr <= 0) continue;
+        const b = binOf(store.f0[base + k]);
+        if (b >= 0 && b < nb) obs[b] += pr;
+      }
+      const uObs = store.unvoiced[t] * uScale + EPS;
+      if (t === 0) {
+        for (let b = 0; b < nb; b++) delta[b] += Math.log(obs[b]);
+        delta[nb] += Math.log(uObs);
+        continue;
+      }
+      // best voiced predecessor of U
+      let bestV = NEG, bestVi = 0;
+      for (let b = 0; b < nb; b++) if (delta[b] > bestV) { bestV = delta[b]; bestVi = b; }
+      for (let b = 0; b < nb; b++) {
+        let best = delta[nb] + logFromU, from = 127;
+        const lo = Math.max(0, b - J), hi = Math.min(nb - 1, b + J);
+        for (let q = lo; q <= hi; q++) {
+          const v = delta[q] + logK[b - q + J];
+          if (v > best) { best = v; from = b - q; }
+        }
+        next[b] = best + Math.log(obs[b]);
+        back[t * nb + b] = from === 127 ? 127 : from;
+      }
+      const fromVoiced = bestV + logSwitch, fromU = delta[nb] + logStay;
+      if (fromVoiced > fromU) { next[nb] = fromVoiced + Math.log(uObs); backU[t] = bestVi; }
+      else { next[nb] = fromU + Math.log(uObs); backU[t] = -1; }
+      const tmp = delta; delta = next; next = tmp;
+    }
+    const path = new Int16Array(nFrames);
+    let state = nb; let bestScore = delta[nb];
+    for (let b = 0; b < nb; b++) if (delta[b] > bestScore) { bestScore = delta[b]; state = b; }
+    for (let t = nFrames - 1; t >= 0; t--) {
+      path[t] = state === nb ? -1 : state;
+      if (t === 0) break;
+      if (state === nb) state = backU[t] >= 0 ? backU[t] : nb;
+      else { const d = back[t * nb + state]; state = d === 127 ? nb : state - d; }
+    }
+    return path;
+  }
+
   function yinPitchTrack(signal, sr, opts) {
     opts = opts || {};
     const frameSize = opts.frameSize || 2048;
@@ -174,6 +331,15 @@
     const energy = new Float64Array(frameSize + 1);
     const df = new Float64Array(maxLag);
     const cmndf = new Float64Array(maxLag);
+    const pyin = opts.method === 'pyin';
+    const pyinStore = pyin ? {
+      f0: new Float32Array(nFrames * PYIN_CANDIDATES),
+      prob: new Float32Array(nFrames * PYIN_CANDIDATES),
+      clar: new Float32Array(nFrames * PYIN_CANDIDATES),
+      unvoiced: new Float32Array(nFrames).fill(1),
+    } : null;
+    const pyinBeta = opts.pyinBeta || 8;
+    const pyinTauDepth = opts.pyinTauDepth != null ? opts.pyinTauDepth : 0.02;
     // Optional progress reporting (fraction 0..1), at most ~100 calls.
     const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
     const progressStep = Math.max(1, Math.ceil(nFrames / 100));
@@ -209,6 +375,8 @@
         runningSum += df[tau];
         cmndf[tau] = runningSum > 0 ? (df[tau] * tau) / runningSum : 1;
       }
+
+      if (pyin) { pyinCollectFrame(cmndf, minLag, maxLag, sr, fmin, fmax, pyinBeta, pyinTauDepth, pyinStore, i); continue; }
 
       let tau = -1;
       for (let t = minLag; t < maxLag - 1; t++) {
@@ -257,7 +425,26 @@
       if (f0 >= fmin && f0 <= fmax) { f0s[i] = f0; voiced[i] = 1; }
     }
 
-    stabilizeOctaveErrors(f0s, voiced, clarity);
+    if (pyin && nFrames > 0) {
+      const path = pyinViterbi(pyinStore, nFrames, sr, hopSize, fmin, fmax, opts);
+      const K = PYIN_CANDIDATES;
+      for (let i = 0; i < nFrames; i++) {
+        const b = path[i];
+        if (b < 0) continue;
+        const centre = fmin * Math.pow(2, b / (12 * PYIN_BINS_PER_SEMITONE));
+        // the strongest candidate near the chosen bin gives the fine f0
+        let bestK = -1, bestP = 0;
+        for (let k = 0; k < K; k++) {
+          const pr = pyinStore.prob[i * K + k];
+          if (pr > bestP && Math.abs(12 * Math.log2(pyinStore.f0[i * K + k] / centre)) <= 1.0) { bestP = pr; bestK = k; }
+        }
+        if (bestK < 0) continue; // the path passed through without evidence here: leave unvoiced
+        f0s[i] = pyinStore.f0[i * K + bestK];
+        clarity[i] = pyinStore.clar[i * K + bestK];
+        voiced[i] = 1;
+      }
+    }
+    if (!opts.skipOctaveRepair) stabilizeOctaveErrors(f0s, voiced, clarity);
     return { f0s, voiced, times, clarity, hopSize, frameSize };
   }
 
